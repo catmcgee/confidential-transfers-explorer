@@ -1,0 +1,24 @@
+{
+  "name": "ct-explorer",
+  "private": true,
+  "workspaces": ["apps/*", "packages/*"],
+  "scripts": {
+    "dev:web": "bun run --filter @ct-explorer/web dev",
+    "dev:indexer": "bun run --filter @ct-explorer/indexer dev",
+    "build": "bun run --filter '*' build",
+    "build:shared": "bun run --filter @ct-explorer/shared build",
+    "lint": "bun run --filter '*' lint",
+    "format": "prettier --write \"**/*.{ts,tsx,js,jsx,json,md}\"",
+    "format:check": "prettier --check \"**/*.{ts,tsx,js,jsx,json,md}\"",
+    "typecheck": "bun run --filter '*' typecheck",
+    "db:migrate": "bun run --filter @ct-explorer/indexer db:migrate",
+    "db:seed": "bun run --filter @ct-explorer/indexer db:seed"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.1.14",
+    "@types/node": "^22.10.0",
+    "eslint": "^9.16.0",
+    "prettier": "^3.4.2",
+    "typescript": "^5.7.2"
+  }
+}

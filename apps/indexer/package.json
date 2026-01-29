@@ -1,0 +1,35 @@
+{
+  "name": "@ct-explorer/indexer",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "scripts": {
+    "dev": "bun --watch src/index.ts",
+    "build": "tsc",
+    "start": "bun dist/index.js",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src/",
+    "db:migrate": "bun src/db/migrate.ts",
+    "db:seed": "bun src/db/seed.ts"
+  },
+  "dependencies": {
+    "@ct-explorer/shared": "*",
+    "@solana/addresses": "^2.0.0",
+    "@solana/codecs": "^2.0.0",
+    "@solana/errors": "^2.0.0",
+    "@solana/keys": "^2.0.0",
+    "@solana/rpc": "^2.0.0",
+    "@solana/rpc-subscriptions": "^2.0.0",
+    "@solana/rpc-types": "^2.0.0",
+    "@solana/transaction-messages": "^2.0.0",
+    "@solana/transactions": "^2.0.0",
+    "dotenv": "^16.4.7",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.1.14",
+    "@types/node": "^22.10.0",
+    "typescript": "^5.7.2"
+  }
+}
