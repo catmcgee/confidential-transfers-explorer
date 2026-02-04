@@ -17,6 +17,7 @@ interface UseFeedResult {
   hasMore: boolean;
   loadMore: () => Promise<void>;
   refresh: () => Promise<void>;
+  addOptimisticActivity: (activity: Partial<CTActivityResponse> & { signature: string }) => void;
 }
 
 export function useFeed(options: UseFeedOptions = {}): UseFeedResult {
@@ -131,6 +132,32 @@ export function useFeed(options: UseFeedOptions = {}): UseFeedResult {
     }
   }, [fetchFeed]);
 
+  // Add an optimistic activity to the top of the feed
+  const addOptimisticActivity = useCallback(
+    (activity: Partial<CTActivityResponse> & { signature: string }) => {
+      const optimisticActivity: CTActivityResponse = {
+        id: Date.now(), // Temporary ID
+        signature: activity.signature,
+        blockTime: Math.floor(Date.now() / 1000),
+        slot: 0,
+        timestamp: new Date().toISOString(),
+        mint: activity.mint || null,
+        instructionType: activity.instructionType || 'ConfidentialTransfer',
+        sourceOwner: activity.sourceOwner || null,
+        destOwner: activity.destOwner || null,
+        sourceTokenAccount: activity.sourceTokenAccount || null,
+        destTokenAccount: activity.destTokenAccount || null,
+        amount: activity.amount || 'confidential',
+        ciphertextLo: activity.ciphertextLo || null,
+        ciphertextHi: activity.ciphertextHi || null,
+        isOptimistic: true, // Flag to show pending state in UI
+      };
+
+      setActivities((prev) => [optimisticActivity, ...prev]);
+    },
+    []
+  );
+
   return {
     activities,
     isLoading,
@@ -138,5 +165,6 @@ export function useFeed(options: UseFeedOptions = {}): UseFeedResult {
     hasMore,
     loadMore,
     refresh,
+    addOptimisticActivity,
   };
 }

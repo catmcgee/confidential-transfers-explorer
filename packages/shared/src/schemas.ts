@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { TRACKED_CT_TYPES } from './constants.js';
 
 // Solana pubkey validation (base58, 32-44 chars)
 export const pubkeySchema = z.string().regex(/^[1-9A-HJ-NP-Za-km-z]{32,44}$/, 'Invalid Solana address');
@@ -14,14 +15,17 @@ export const paginationSchema = z.object({
   cursor: z.coerce.number().int().optional(),
 });
 
+// All valid CT type filters
+const ctTypeFilter = z.enum(['all', ...TRACKED_CT_TYPES] as [string, ...string[]]).default('all');
+
 // Feed query params
 export const feedQuerySchema = paginationSchema.extend({
-  type: z.enum(['all', 'Transfer', 'Deposit', 'Withdraw', 'ApplyPendingBalance']).default('all'),
+  type: ctTypeFilter,
 });
 
 // Address query params
 export const addressQuerySchema = paginationSchema.extend({
-  type: z.enum(['all', 'Transfer', 'Deposit', 'Withdraw', 'ApplyPendingBalance']).default('all'),
+  type: ctTypeFilter,
 });
 
 // Login request schema

@@ -18,7 +18,7 @@ export async function POST(request: NextRequest) {
     const { publicKey, signature, message } = parseResult.data;
 
     // Verify the message format (should include timestamp)
-    const messagePattern = /^CT Explorer Login: \d+$/;
+    const messagePattern = /^Confidential Explorer Login: \d+$/;
     if (!messagePattern.test(message)) {
       return NextResponse.json(apiError('Invalid message format', 'INVALID_MESSAGE'), {
         status: 400,

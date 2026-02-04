@@ -67,9 +67,8 @@ export function ActivityTable({
       <table className="activity-table">
         <thead>
           <tr>
-            <th>Slot</th>
-            <th>Type</th>
             <th>Signature</th>
+            <th>Type</th>
             {showMint && <th>Mint</th>}
             <th>From</th>
             <th>To</th>
@@ -89,37 +88,36 @@ export function ActivityTable({
                 activity.destTokenAccount === highlightAddress);
 
             return (
-              <tr key={activity.id}>
-                <td className="text-zinc-500 text-xs whitespace-nowrap font-mono">
-                  {activity.slot.toLocaleString()}
-                </td>
-                <td>
-                  <span className={`badge ${getTypeBadgeClass(activity.instructionType)}`}>
-                    {getTypeDisplayName(activity.instructionType)}
-                  </span>
-                </td>
+              <tr key={activity.id} className={activity.isOptimistic ? 'opacity-60 animate-pulse' : ''}>
                 <td>
                   <div className="flex items-center">
-                    <Link
-                      href={`/tx/${activity.signature}`}
-                      className="font-mono text-xs text-zinc-400 hover:text-zinc-200 transition-colors"
-                    >
-                      {shortenSignature(activity.signature, 12)}
-                    </Link>
+                    {activity.isOptimistic ? (
+                      <span className="font-mono text-xs text-yellow-500 flex items-center gap-1">
+                        <span className="w-1.5 h-1.5 bg-yellow-500 rounded-full animate-ping"></span>
+                        {shortenSignature(activity.signature, 12)}
+                      </span>
+                    ) : (
+                      <Link
+                        href={`/tx/${activity.signature}`}
+                        className="font-mono text-xs text-zinc-400 hover:text-zinc-200 transition-colors"
+                      >
+                        {shortenSignature(activity.signature, 12)}
+                      </Link>
+                    )}
                     <CopyButton text={activity.signature} />
                   </div>
+                </td>
+                <td>
+                  <span className={`badge ${getTypeBadgeClass(activity.instructionType)} w-24 ${activity.isOptimistic ? 'border-yellow-500/30' : ''}`}>
+                    {activity.isOptimistic ? 'Pending' : getTypeDisplayName(activity.instructionType)}
+                  </span>
                 </td>
                 {showMint && (
                   <td>
                     {activity.mint ? (
-                      <a
-                        href={`https://solscan.io/token/${activity.mint}`}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="font-mono text-xs text-zinc-500 hover:text-zinc-300 transition-colors"
-                      >
+                      <span className="font-mono text-xs text-zinc-500">
                         {shortenAddress(activity.mint, 4)}
-                      </a>
+                      </span>
                     ) : (
                       <span className="text-zinc-700">—</span>
                     )}
@@ -127,36 +125,30 @@ export function ActivityTable({
                 )}
                 <td>
                   {activity.sourceOwner ? (
-                    <a
-                      href={`https://solscan.io/account/${activity.sourceOwner}`}
-                      target="_blank"
-                      rel="noopener noreferrer"
+                    <span
                       className={`font-mono text-xs ${
                         isHighlightedSource
                           ? 'text-amber-400'
-                          : 'text-zinc-500 hover:text-zinc-300'
-                      } transition-colors`}
+                          : 'text-zinc-500'
+                      }`}
                     >
                       {shortenAddress(activity.sourceOwner, 4)}
-                    </a>
+                    </span>
                   ) : (
                     <span className="text-zinc-700">—</span>
                   )}
                 </td>
                 <td>
                   {activity.destOwner ? (
-                    <a
-                      href={`https://solscan.io/account/${activity.destOwner}`}
-                      target="_blank"
-                      rel="noopener noreferrer"
+                    <span
                       className={`font-mono text-xs ${
                         isHighlightedDest
                           ? 'text-amber-400'
-                          : 'text-zinc-500 hover:text-zinc-300'
-                      } transition-colors`}
+                          : 'text-zinc-500'
+                      }`}
                     >
                       {shortenAddress(activity.destOwner, 4)}
-                    </a>
+                    </span>
                   ) : (
                     <span className="text-zinc-700">—</span>
                   )}

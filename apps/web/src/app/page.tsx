@@ -1,21 +1,39 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import { ActivityTable } from '@/components/ActivityTable';
 import { TypeFilter } from '@/components/TypeFilter';
 import { LoadingSpinner } from '@/components/LoadingSpinner';
 import { TransferModal } from '@/components/TransferModal';
+import { useWallet } from '@/components/WalletProvider';
 import { useFeed } from '@/hooks/useFeed';
 
 export default function HomePage() {
+  const { publicKey, isConnected } = useWallet();
   const [typeFilter, setTypeFilter] = useState('all');
   const [isTransferModalOpen, setIsTransferModalOpen] = useState(false);
-  const { activities, isLoading, error, hasMore, loadMore, refresh } = useFeed({
-    type: typeFilter,
+
+  // Determine the actual filter to use
+  const actualTypeFilter = typeFilter === 'mine' ? 'all' : typeFilter;
+
+  const { activities, isLoading, error, hasMore, loadMore, refresh, addOptimisticActivity } = useFeed({
+    type: actualTypeFilter,
     limit: 50,
     autoRefresh: true,
     refreshInterval: 15000,
   });
+
+  // Filter for "mine" if selected
+  const filteredActivities = useMemo(() => {
+    if (typeFilter !== 'mine' || !publicKey) return activities;
+
+    return activities.filter(activity =>
+      activity.sourceOwner === publicKey ||
+      activity.destOwner === publicKey ||
+      activity.sourceTokenAccount === publicKey ||
+      activity.destTokenAccount === publicKey
+    );
+  }, [activities, typeFilter, publicKey]);
 
   return (
     <div className="min-h-[calc(100vh-80px)]">
@@ -46,12 +64,16 @@ export default function HomePage() {
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-4">
           <div className="flex items-center gap-3">
             <span className="text-xs text-zinc-500 uppercase tracking-wider font-medium">Filter</span>
-            <TypeFilter value={typeFilter} onChange={setTypeFilter} />
+            <TypeFilter
+              value={typeFilter}
+              onChange={setTypeFilter}
+              isConnected={isConnected}
+            />
           </div>
 
           <div className="flex items-center gap-3">
             <span className="text-xs text-zinc-600 font-mono">
-              {activities.length} transactions
+              {filteredActivities.length} transactions
             </span>
             <button
               onClick={refresh}
@@ -90,9 +112,12 @@ export default function HomePage() {
             </div>
           ) : (
             <>
-              <ActivityTable activities={activities} />
+              <ActivityTable
+                activities={filteredActivities}
+                highlightAddress={publicKey || undefined}
+              />
 
-              {hasMore && (
+              {hasMore && typeFilter !== 'mine' && (
                 <div className="p-4 border-t border-zinc-800/50 text-center">
                   <button
                     onClick={loadMore}
@@ -115,9 +140,11 @@ export default function HomePage() {
         </div>
 
         {/* Empty state */}
-        {!isLoading && !error && activities.length === 0 && (
+        {!isLoading && !error && filteredActivities.length === 0 && (
           <div className="text-center py-16">
-            <p className="text-zinc-600 text-sm font-mono">No activity found</p>
+            <p className="text-zinc-600 text-sm font-mono">
+              {typeFilter === 'mine' ? 'No transactions found for your wallet' : 'No activity found'}
+            </p>
           </div>
         )}
       </div>
@@ -126,6 +153,9 @@ export default function HomePage() {
       <TransferModal
         isOpen={isTransferModalOpen}
         onClose={() => setIsTransferModalOpen(false)}
+        onTransferComplete={(transferData) => {
+          addOptimisticActivity(transferData);
+        }}
       />
     </div>
   );

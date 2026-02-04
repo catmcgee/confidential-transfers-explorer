@@ -84,7 +84,7 @@ export default function AddressPage({ params }: AddressPageProps) {
       <div className="card">
         <div className="p-4 border-b border-gray-800">
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-            <h2 className="text-lg font-semibold text-white">CT Activity</h2>
+            <h2 className="text-lg font-semibold text-white">Confidential Activity</h2>
             <div className="flex items-center gap-4">
               <TypeFilter value={typeFilter} onChange={setTypeFilter} />
               <button
@@ -120,7 +120,7 @@ export default function AddressPage({ params }: AddressPageProps) {
           </div>
         ) : activities.length === 0 ? (
           <div className="p-12 text-center">
-            <p className="text-gray-400">No CT activity found for this address.</p>
+            <p className="text-gray-400">No confidential activity found for this address.</p>
           </div>
         ) : (
           <>

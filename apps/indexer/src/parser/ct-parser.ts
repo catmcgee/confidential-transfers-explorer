@@ -148,7 +148,16 @@ export function parseAccounts(
     case 'TransferWithSplitProofs':
     case 'TransferWithFee':
       // Transfer: [source_token, mint, dest_token, owner, ...]
-      if (accounts.length >= 4) {
+      // OR with split proofs context accounts:
+      // [source_token, mint, dest_token, equality_ctx, validity_ctx, range_ctx, sysvar, owner]
+      if (accounts.length >= 8) {
+        // Transfer with context accounts (split proofs)
+        result.sourceTokenAccount = accounts[0] ?? null;
+        result.mint = accounts[1] ?? null;
+        result.destTokenAccount = accounts[2] ?? null;
+        result.sourceOwner = accounts[7] ?? null; // Owner is at index 7
+      } else if (accounts.length >= 4) {
+        // Standard transfer
         result.sourceTokenAccount = accounts[0] ?? null;
         result.mint = accounts[1] ?? null;
         result.destTokenAccount = accounts[2] ?? null;

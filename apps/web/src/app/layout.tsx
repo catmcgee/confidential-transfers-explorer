@@ -4,7 +4,7 @@ import { Header } from '@/components/Header';
 import { WalletProvider } from '@/components/WalletProvider';
 
 export const metadata: Metadata = {
-  title: 'CT Explorer - Confidential Transfer Explorer',
+  title: 'Confidential Transfer Explorer',
   description: 'Explore Confidential Transfer activity on Solana',
 };
 

@@ -12,7 +12,9 @@
     "format:check": "prettier --check \"**/*.{ts,tsx,js,jsx,json,md}\"",
     "typecheck": "bun run --filter '*' typecheck",
     "db:migrate": "bun run --filter @ct-explorer/indexer db:migrate",
-    "db:seed": "bun run --filter @ct-explorer/indexer db:seed"
+    "db:seed": "bun run --filter @ct-explorer/indexer db:seed",
+    "setup:mint": "cd apps/web && bun run ../../scripts/setup-ct-mint.ts",
+    "mint:more": "cd apps/web && bun run ../../scripts/mint-more.ts"
   },
   "devDependencies": {
     "@types/bun": "^1.1.14",
@@ -20,5 +22,8 @@
     "eslint": "^9.16.0",
     "prettier": "^3.4.2",
     "typescript": "^5.7.2"
+  },
+  "dependencies": {
+    "@solana/spl-token": "^0.4.14"
   }
 }

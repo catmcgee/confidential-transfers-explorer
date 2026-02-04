@@ -106,13 +106,13 @@ export function getTypeDisplayName(type: string): string {
     case 'EmptyAccount':
       return 'Empty';
     case 'EnableConfidentialCredits':
-      return 'Enable CT';
+      return 'Enable Conf';
     case 'DisableConfidentialCredits':
-      return 'Disable CT';
+      return 'Disable Conf';
     case 'EnableNonConfidentialCredits':
-      return 'Enable Non-CT';
+      return 'Enable Non-Conf';
     case 'DisableNonConfidentialCredits':
-      return 'Disable Non-CT';
+      return 'Disable Non-Conf';
     case 'InitializeMint':
       return 'Init Mint';
     case 'UpdateMint':

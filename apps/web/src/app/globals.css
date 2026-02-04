@@ -53,7 +53,7 @@ body {
 
 /* Type badges - colors match action semantics */
 .badge {
-  @apply inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium uppercase tracking-wide;
+  @apply inline-flex items-center justify-center px-1.5 py-0.5 rounded text-[10px] font-medium uppercase tracking-wide;
 }
 
 /* Transfer: purple - primary confidential action */

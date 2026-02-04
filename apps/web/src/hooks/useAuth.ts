@@ -100,7 +100,7 @@ export function useAuth() {
     try {
       // Create message with timestamp
       const timestamp = Date.now();
-      const message = `CT Explorer Login: ${timestamp}`;
+      const message = `Confidential Explorer Login: ${timestamp}`;
       const messageBytes = new TextEncoder().encode(message);
 
       // Sign message

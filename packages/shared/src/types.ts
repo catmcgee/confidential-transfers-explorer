@@ -56,6 +56,8 @@ export interface CTActivityResponse {
   amount: 'confidential' | string;
   ciphertextLo: string | null;
   ciphertextHi: string | null;
+  // Client-side optimistic flag (not stored in DB)
+  isOptimistic?: boolean;
 }
 
 export interface FeedResponse {
