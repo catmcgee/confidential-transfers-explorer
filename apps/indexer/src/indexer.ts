@@ -117,16 +117,16 @@ export class CTIndexer {
    */
   private async pollNewSignatures(): Promise<void> {
     try {
-      const options: { limit: number; until?: string } = {
+      const options: Record<string, unknown> = {
         limit: this.config.batchSize,
       };
 
       if (this.lastSignature) {
-        options.until = this.lastSignature;
+        options['until'] = this.lastSignature;
       }
 
       const response = await this.rpc
-        .getSignaturesForAddress(address(TOKEN_2022_PROGRAM_ID), options)
+        .getSignaturesForAddress(address(TOKEN_2022_PROGRAM_ID), options as Parameters<typeof this.rpc.getSignaturesForAddress>[1])
         .send();
 
       const signatures = response;
@@ -187,8 +187,9 @@ export class CTIndexer {
       // Fetch transaction
       const txResponse = await this.rpc
         .getTransaction(signature as unknown as Parameters<typeof this.rpc.getTransaction>[0], {
+          encoding: 'json',
           maxSupportedTransactionVersion: 0,
-        })
+        } as Parameters<typeof this.rpc.getTransaction>[1])
         .send();
 
       if (!txResponse) {

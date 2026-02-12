@@ -192,7 +192,7 @@ export async function fetchActivitiesForAddress(
         if (seenSigs.has(sig)) continue;
         seenSigs.add(sig);
         // Prefer Transfer/Deposit/Withdraw/Configure over other types
-        const primary = activities.find(a =>
+        const primary = activities.find((a: CTActivityResponse) =>
           ['Transfer', 'Deposit', 'Withdraw', 'Configure', 'ApplyPendingBalance'].includes(a.instructionType)
         ) ?? activities[0]!;
         allActivities.push(primary);

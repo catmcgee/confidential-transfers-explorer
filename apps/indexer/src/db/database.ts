@@ -124,7 +124,7 @@ export class CTDatabase {
     params['$limit'] = limit + 1;
 
     const stmt = this.db.prepare(query);
-    const rows = stmt.all(params) as CTActivityRecord[];
+    const rows = stmt.all(params as Record<string, string | number | bigint | boolean | null>) as CTActivityRecord[];
 
     const hasMore = rows.length > limit;
     const activities = hasMore ? rows.slice(0, -1) : rows;
@@ -168,7 +168,7 @@ export class CTDatabase {
     params['$limit'] = limit + 1;
 
     const stmt = this.db.prepare(query);
-    const rows = stmt.all(params) as CTActivityRecord[];
+    const rows = stmt.all(params as Record<string, string | number | bigint | boolean | null>) as CTActivityRecord[];
 
     const hasMore = rows.length > limit;
     const activities = hasMore ? rows.slice(0, -1) : rows;

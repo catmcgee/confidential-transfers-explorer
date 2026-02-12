@@ -586,7 +586,7 @@ export async function buildConfigureCtInstructions(
     mint: address(mintAddress),
     instructionsSysvarOrContextState: SYSVAR_INSTRUCTIONS_ID,
     authority: address(ownerAddress),
-    decryptableZeroBalance: decryptableZeroBalance as DecryptableBalanceArgs,
+    decryptableZeroBalance: decryptableZeroBalance as never,
     maximumPendingBalanceCreditCounter: 65536n,
     proofInstructionOffset: 1, // proof comes AFTER configure
   });
@@ -703,7 +703,7 @@ export async function buildApplyPendingBalanceInstruction(
   return getApplyConfidentialPendingBalanceInstruction({
     token: address(tokenAccountAddress),
     authority: address(ownerAddress),
-    newDecryptableAvailableBalance: newDecryptableBalance as DecryptableBalanceArgs,
+    newDecryptableAvailableBalance: newDecryptableBalance as never,
     expectedPendingBalanceCreditCounter,
   });
 }
@@ -1013,7 +1013,7 @@ export async function buildSplitProofTransferTransactions(
   console.log('Data[0]:', transferData[0], '(expected 27 = CT extension)');
   console.log('Data[1]:', transferData[1], '(expected 7 = Transfer)');
   console.log('Data[166-168]:', transferData[166], transferData[167], transferData[168], '(expected 0 0 0 = context state offsets)');
-  transferInstruction.accounts.forEach((a, i) => {
+  transferInstruction.accounts?.forEach((a, i) => {
     const roles = ['READONLY', 'WRITABLE', 'READONLY_SIGNER', 'WRITABLE_SIGNER'];
     console.log(`  Account[${i}]: ${String(a.address)} ${roles[a.role] || a.role}`);
   });

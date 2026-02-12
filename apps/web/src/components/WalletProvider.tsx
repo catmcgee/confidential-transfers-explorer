@@ -306,7 +306,7 @@ export function WalletProvider({ children }: WalletProviderProps) {
         secretKey = bs58.decode(stored);
       } else {
         // Generate new keypair
-        secretKey = ed25519.utils.randomPrivateKey();
+        secretKey = ed25519.utils.randomSecretKey();
       }
     }
 

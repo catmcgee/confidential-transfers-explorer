@@ -50,7 +50,7 @@ export function parseCTInstructionType(data: Uint8Array): TrackedCTType | 'Unkno
 
   // The CT instruction type is the second byte (index 1)
   // Format: [27 (CT discriminator), instruction_type, ...data]
-  const ctInstructionType = data[1];
+  const ctInstructionType = data[1]!;
 
   // Map instruction discriminator to type name
   const typeName = CT_INSTRUCTION_NAMES[ctInstructionType];

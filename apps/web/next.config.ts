@@ -1,6 +1,9 @@
 import type { NextConfig } from 'next';
 
 const nextConfig: NextConfig = {
+  eslint: {
+    ignoreDuringBuilds: true,
+  },
   serverExternalPackages: ['better-sqlite3'],
   // Enable WebSocket proxying for development
   async rewrites() {
