@@ -2,10 +2,31 @@ import { NextRequest, NextResponse } from 'next/server';
 import { feedQuerySchema, apiResponse, apiError } from '@ct-explorer/shared';
 import type { CTActivityResponse, FeedResponse } from '@ct-explorer/shared';
 import { getFeed } from '@/lib/db';
+import { fetchActivitiesForAddress } from '@/lib/rpc';
 
 export async function GET(request: NextRequest) {
   try {
     const searchParams = request.nextUrl.searchParams;
+    const address = searchParams.get('address');
+
+    // If address is provided, fetch from RPC directly
+    if (address) {
+      const limit = parseInt(searchParams.get('limit') ?? '50', 10);
+      const activities = await fetchActivitiesForAddress(address, limit);
+
+      // Filter by type if specified
+      const type = searchParams.get('type') ?? 'all';
+      const filtered = type === 'all'
+        ? activities
+        : activities.filter((a) => a.instructionType === type);
+
+      const response: FeedResponse = {
+        activities: filtered,
+        cursor: null,
+        hasMore: false,
+      };
+      return NextResponse.json(apiResponse(response));
+    }
 
     // Parse and validate query params
     const parseResult = feedQuerySchema.safeParse({

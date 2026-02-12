@@ -1,7 +1,10 @@
 'use client';
 
-import { createContext, useContext, useState, useEffect, useCallback, type ReactNode } from 'react';
-import { VersionedTransaction } from '@solana/web3.js';
+import { createContext, useContext, useState, useEffect, useCallback, useRef, type ReactNode } from 'react';
+import { VersionedTransaction, PublicKey } from '@solana/web3.js';
+import { getWallets as getStandardWallets } from '@wallet-standard/app';
+import { ed25519 } from '@noble/curves/ed25519.js';
+import bs58 from 'bs58';
 
 // Wallet Standard types
 interface WalletAccount {
@@ -26,10 +29,13 @@ interface WalletContextType {
   isConnected: boolean;
   isConnecting: boolean;
   connect: () => Promise<void>;
+  connectDevWallet: (secretKeyBase58?: string) => void;
   disconnect: () => void;
   signMessage: (message: Uint8Array) => Promise<Uint8Array>;
   signAndSendTransaction: (transaction: Uint8Array) => Promise<string>;
 }
+
+const DEV_WALLET_KEY = 'devWalletSecretKey';
 
 const WalletContext = createContext<WalletContextType | null>(null);
 
@@ -48,13 +54,24 @@ interface WalletProviderProps {
 const WALLET_CONNECTED_KEY = 'walletConnected';
 
 /**
- * Wait for a transaction to be confirmed
+ * Wait for a transaction to be confirmed.
+ * Optionally resends the raw transaction periodically to combat dropped txs.
+ * Returns { confirmed: true } on success, { confirmed: false, error: ... } on failure
  */
-async function waitForConfirmation(rpcUrl: string, signature: string, timeoutMs: number = 30000): Promise<boolean> {
+export async function waitForConfirmation(
+  rpcUrl: string,
+  signature: string,
+  timeoutMs: number = 30000,
+  rawBase64Tx?: string // optional: resend periodically if provided
+): Promise<{ confirmed: boolean; error?: unknown }> {
+  const isCustomRpc = rpcUrl.includes('zk-edge.surfnet.dev');
+  const effectiveTimeoutMs = isCustomRpc ? Math.max(timeoutMs, 60000) : timeoutMs;
   const startTime = Date.now();
-  const pollInterval = 1000; // Check every second
+  const pollInterval = 2000; // Check every 2 seconds
+  const resendInterval = 4000; // Resend every 4 seconds
+  let lastResend = startTime;
 
-  while (Date.now() - startTime < timeoutMs) {
+  while (Date.now() - startTime < effectiveTimeoutMs) {
     try {
       const response = await fetch(rpcUrl, {
         method: 'POST',
@@ -71,21 +88,49 @@ async function waitForConfirmation(rpcUrl: string, signature: string, timeoutMs:
       if (result.result?.value?.[0]) {
         const status = result.result.value[0];
         if (status.confirmationStatus === 'confirmed' || status.confirmationStatus === 'finalized') {
-          return true;
+          if (status.err) {
+            console.error('Transaction confirmed but failed:', status.err);
+            return { confirmed: false, error: status.err };
+          }
+          return { confirmed: true };
         }
         if (status.err) {
           console.error('Transaction failed:', status.err);
-          return false;
+          return { confirmed: false, error: status.err };
         }
       }
     } catch (e) {
       console.warn('Error checking confirmation:', e);
     }
 
+    // Periodically resend the transaction to combat dropped txs
+    if (rawBase64Tx && Date.now() - lastResend >= resendInterval) {
+      lastResend = Date.now();
+      try {
+        console.log('Resending transaction...');
+        await fetch(rpcUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            jsonrpc: '2.0',
+            id: 1,
+            method: 'sendTransaction',
+            params: [rawBase64Tx, { skipPreflight: true, encoding: 'base64' }]
+          })
+        });
+      } catch (resendErr) {
+        console.warn('Resend failed:', resendErr);
+      }
+    }
+
     await new Promise(resolve => setTimeout(resolve, pollInterval));
   }
 
-  return false;
+  if (isCustomRpc) {
+    console.warn('Confirmation timeout on custom RPC. Transaction may have been dropped.');
+  }
+
+  return { confirmed: false, error: 'Confirmation timeout' };
 }
 
 export function WalletProvider({ children }: WalletProviderProps) {
@@ -93,23 +138,28 @@ export function WalletProvider({ children }: WalletProviderProps) {
   const [account, setAccount] = useState<WalletAccount | null>(null);
   const [isConnecting, setIsConnecting] = useState(false);
   const [hasAutoConnected, setHasAutoConnected] = useState(false);
+  // Store reference to the original Wallet Standard wallet for feature access
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const standardWalletRef = useRef<any>(null);
+  // Dev wallet secret key for local signing
+  const devSecretKeyRef = useRef<Uint8Array | null>(null);
 
   // Get available wallets from the Wallet Standard registry
   const getWallets = useCallback((): Wallet[] => {
     if (typeof window === 'undefined') return [];
 
-    // Access wallets through the standard registry
-    const windowWithWallets = window as unknown as {
-      navigator?: {
-        wallets?: {
-          get?: () => Wallet[];
-        };
-      };
-    };
+    try {
+      // Use the proper Wallet Standard API
+      const { get } = getStandardWallets();
+      const standardWallets = get();
+      if (standardWallets.length > 0) {
+        return standardWallets as unknown as Wallet[];
+      }
+    } catch (e) {
+      console.warn('Failed to get standard wallets:', e);
+    }
 
-    // Try Wallet Standard API
-    const wallets = windowWithWallets.navigator?.wallets?.get?.() ?? [];
-    return wallets;
+    return [];
   }, []);
 
   // Connect to first available wallet
@@ -200,16 +250,26 @@ export function WalletProvider({ children }: WalletProviderProps) {
         throw new Error('No wallet found. Please install a Solana wallet.');
       }
 
-      const selectedWallet = wallets[0]!;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const selectedWallet = wallets[0] as any;
 
-      // Connect if needed
-      if (selectedWallet.connect) {
+      // Store original wallet ref for feature access
+      standardWalletRef.current = selectedWallet;
+
+      // Connect using standard:connect feature if available
+      const connectFeature = selectedWallet.features?.['standard:connect'];
+      if (connectFeature?.connect) {
+        await connectFeature.connect();
+      } else if (selectedWallet.connect) {
         await selectedWallet.connect();
       }
 
-      if (selectedWallet.accounts.length === 0) {
+      if (!selectedWallet.accounts || selectedWallet.accounts.length === 0) {
         throw new Error('No accounts available');
       }
+
+      console.log('Wallet Standard wallet connected:', selectedWallet.name);
+      console.log('Features:', Object.keys(selectedWallet.features || {}));
 
       setWallet(selectedWallet);
       setAccount(selectedWallet.accounts[0] ?? null);
@@ -226,7 +286,64 @@ export function WalletProvider({ children }: WalletProviderProps) {
   const disconnect = useCallback(() => {
     setWallet(null);
     setAccount(null);
+    devSecretKeyRef.current = null;
+    standardWalletRef.current = null;
     localStorage.removeItem(WALLET_CONNECTED_KEY);
+    localStorage.removeItem(DEV_WALLET_KEY);
+  }, []);
+
+  // Connect a dev wallet using a local keypair (bypasses wallet extension)
+  const connectDevWallet = useCallback((secretKeyBase58?: string) => {
+    let secretKey: Uint8Array;
+
+    if (secretKeyBase58) {
+      // Use provided key
+      secretKey = bs58.decode(secretKeyBase58);
+    } else {
+      // Check localStorage for existing dev wallet
+      const stored = localStorage.getItem(DEV_WALLET_KEY);
+      if (stored) {
+        secretKey = bs58.decode(stored);
+      } else {
+        // Generate new keypair
+        secretKey = ed25519.utils.randomPrivateKey();
+      }
+    }
+
+    // Full keypair (64 bytes) - extract first 32 as secret key
+    if (secretKey.length === 64) {
+      secretKey = secretKey.slice(0, 32);
+    }
+
+    // Store for signing
+    devSecretKeyRef.current = secretKey;
+    localStorage.setItem(DEV_WALLET_KEY, bs58.encode(secretKey));
+
+    // Derive public key
+    const publicKeyBytes = ed25519.getPublicKey(secretKey);
+    const publicKeyBase58 = new PublicKey(publicKeyBytes).toBase58();
+
+    console.log('Dev wallet connected:', publicKeyBase58);
+
+    const devWallet: Wallet = {
+      name: 'Dev Wallet',
+      icon: '',
+      accounts: [
+        {
+          address: publicKeyBase58,
+          publicKey: publicKeyBytes,
+          chains: ['solana:devnet'],
+          features: ['solana:signMessage'],
+        },
+      ],
+      features: {
+        'standard:connect': true,
+      },
+    };
+
+    setWallet(devWallet);
+    setAccount(devWallet.accounts[0] ?? null);
+    localStorage.setItem(WALLET_CONNECTED_KEY, 'dev');
   }, []);
 
   // Sign a message
@@ -234,6 +351,12 @@ export function WalletProvider({ children }: WalletProviderProps) {
     async (message: Uint8Array): Promise<Uint8Array> => {
       if (!wallet || !account) {
         throw new Error('Wallet not connected');
+      }
+
+      // Dev wallet: sign locally
+      if (wallet.name === 'Dev Wallet' && devSecretKeyRef.current) {
+        const signature = ed25519.sign(message, devSecretKeyRef.current);
+        return signature;
       }
 
       // Try Backpack direct API first (it has issues with Wallet Standard Buffer encoding)
@@ -288,6 +411,68 @@ export function WalletProvider({ children }: WalletProviderProps) {
     async (transaction: Uint8Array): Promise<string> => {
       if (!wallet || !account) {
         throw new Error('Wallet not connected');
+      }
+
+      // Dev wallet: sign locally and send directly to RPC
+      if (wallet.name === 'Dev Wallet' && devSecretKeyRef.current) {
+        const versionedTx = VersionedTransaction.deserialize(transaction);
+        const messageBytes = versionedTx.message.serialize();
+        const signature = ed25519.sign(messageBytes, devSecretKeyRef.current);
+        versionedTx.signatures[0] = signature;
+
+        const serializedTx = versionedTx.serialize();
+        const base64Tx = btoa(String.fromCharCode(...serializedTx));
+        const rpcUrl = process.env.NEXT_PUBLIC_SOLANA_RPC_URL || 'https://zk-edge.surfnet.dev:8899';
+
+        // Debug: simulate first to get program logs
+        console.log('Dev wallet: simulating transaction first...');
+        const simResponse = await fetch(rpcUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            jsonrpc: '2.0',
+            id: 1,
+            method: 'simulateTransaction',
+            params: [base64Tx, { encoding: 'base64', sigVerify: false, commitment: 'confirmed' }]
+          })
+        });
+        const simResult = await simResponse.json();
+        if (simResult.result?.value?.err) {
+          console.log('SIMULATION ERROR:', JSON.stringify(simResult.result.value.err));
+        }
+        if (simResult.result?.value?.logs) {
+          console.log('SIMULATION LOGS:');
+          simResult.result.value.logs.forEach((log: string) => console.log('  ', log));
+        }
+
+        console.log('Dev wallet: sending signed transaction to RPC...');
+        const response = await fetch(rpcUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            jsonrpc: '2.0',
+            id: 1,
+            method: 'sendTransaction',
+            params: [base64Tx, { skipPreflight: true, encoding: 'base64' }]
+          })
+        });
+        const result = await response.json();
+        console.log('Dev wallet RPC response:', result);
+
+        if (result.error) {
+          throw new Error(result.error.message || JSON.stringify(result.error));
+        }
+
+        const sig = result.result;
+        const confirmResult = await waitForConfirmation(rpcUrl, sig, 30000);
+        if (!confirmResult.confirmed) {
+          const errMsg = confirmResult.error
+            ? `Transaction failed: ${JSON.stringify(confirmResult.error)}`
+            : 'Transaction not confirmed within timeout';
+          throw new Error(errMsg);
+        }
+        console.log('Dev wallet transaction confirmed!', sig);
+        return sig;
       }
 
       // Try Backpack direct API first
@@ -388,29 +573,46 @@ export function WalletProvider({ children }: WalletProviderProps) {
                 throw new Error(result.error.message || JSON.stringify(result.error));
               }
 
-              // Wait for confirmation before returning
+              // Wait for confirmation before returning, resending periodically
               const signature = result.result;
               console.log('Transaction sent, waiting for confirmation...', signature);
 
-              const confirmed = await waitForConfirmation(rpcUrl, signature, 30000);
-              if (!confirmed) {
-                throw new Error('Transaction not confirmed within timeout');
+              const confirmResult = await waitForConfirmation(rpcUrl, signature, 60000, base64Tx);
+              if (!confirmResult.confirmed) {
+                const errMsg = confirmResult.error
+                  ? `Transaction failed: ${JSON.stringify(confirmResult.error, (_, v) => typeof v === 'bigint' ? v.toString() : v)}`
+                  : 'Transaction not confirmed within timeout';
+                throw new Error(errMsg);
               }
               console.log('Transaction confirmed!', signature);
 
               return signature;
             } catch (signError) {
-              console.log('Sign-then-send failed, trying signAndSendTransaction:', signError);
+              const errMsg = signError instanceof Error ? signError.message : String(signError);
+              console.log('Sign-then-send failed:', errMsg);
+              // If the tx was already sent but timed out, don't retry with a new signature
+              if (errMsg.includes('Confirmation timeout') || errMsg.includes('not confirmed')) {
+                throw signError;
+              }
+              console.log('Falling through to signAndSendTransaction...');
             }
           }
 
           // Fallback to signAndSendTransaction
           if (backpack.signAndSendTransaction) {
-            const result = await backpack.signAndSendTransaction(
-              versionedTx,
-              { skipPreflight: true, maxRetries: 3 }
-            );
-            return result.signature;
+            try {
+              const result = await backpack.signAndSendTransaction(
+                versionedTx,
+                { skipPreflight: true, maxRetries: 3 }
+              );
+              return result.signature;
+            } catch (fallbackError) {
+              const errorMsg = fallbackError instanceof Error
+                ? fallbackError.message
+                : String(fallbackError);
+              console.error('Backpack direct API failed, falling through to Wallet Standard:', errorMsg);
+              // Don't throw - fall through to Wallet Standard approach
+            }
           }
         }
       }
@@ -440,14 +642,88 @@ export function WalletProvider({ children }: WalletProviderProps) {
         }
       }
 
-      // Try Wallet Standard feature (for other wallets)
-      const signAndSendFeature = wallet.features['solana:signAndSendTransaction'] as
-        | { signAndSendTransaction: (transaction: Uint8Array) => Promise<{ signature: string }> }
-        | undefined;
+      // Try Wallet Standard signTransaction + manual send (to use custom RPC)
+      // Check both the stored wallet and the standardWalletRef for features
+      const wsWallet = standardWalletRef.current || wallet;
+      const wsAccount = wsWallet?.accounts?.[0] || account;
+      console.log('Wallet Standard features available:', Object.keys(wsWallet?.features || {}));
 
-      if (signAndSendFeature) {
-        const result = await signAndSendFeature.signAndSendTransaction(transaction);
-        return result.signature;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const signFeature = wsWallet?.features?.['solana:signTransaction'] as any;
+
+      if (signFeature?.signTransaction && wsAccount) {
+        try {
+          console.log('Trying Wallet Standard signTransaction + manual send...');
+          const signResults = await signFeature.signTransaction({
+            transaction,
+            account: wsAccount,
+            chain: 'solana:devnet',
+          });
+          // Wallet Standard may return array or single result
+          const signedTransaction = Array.isArray(signResults)
+            ? signResults[0]?.signedTransaction
+            : signResults?.signedTransaction;
+
+          // Send to our custom RPC
+          const base64Tx = btoa(String.fromCharCode(...signedTransaction));
+          const rpcUrl = process.env.NEXT_PUBLIC_SOLANA_RPC_URL || 'https://zk-edge.surfnet.dev:8899';
+
+          const response = await fetch(rpcUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              jsonrpc: '2.0',
+              id: 1,
+              method: 'sendTransaction',
+              params: [base64Tx, { skipPreflight: true, encoding: 'base64' }]
+            })
+          });
+          const result = await response.json();
+          console.log('Wallet Standard sign + manual send RPC response:', result);
+
+          if (result.error) {
+            throw new Error(result.error.message || JSON.stringify(result.error));
+          }
+
+          const signature = result.result;
+          const confirmResult = await waitForConfirmation(rpcUrl, signature, 30000);
+          if (!confirmResult.confirmed) {
+            const errMsg = confirmResult.error
+              ? `Transaction failed: ${JSON.stringify(confirmResult.error)}`
+              : 'Transaction not confirmed within timeout';
+            throw new Error(errMsg);
+          }
+          console.log('Transaction confirmed via Wallet Standard sign!', signature);
+          return signature;
+        } catch (wsSignError) {
+          console.error('Wallet Standard signTransaction failed:', wsSignError);
+          // Fall through to signAndSendTransaction
+        }
+      }
+
+      // Try Wallet Standard signAndSendTransaction
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const signAndSendFeature = wsWallet?.features?.['solana:signAndSendTransaction'] as any;
+
+      if (signAndSendFeature?.signAndSendTransaction && wsAccount) {
+        try {
+          const sendResults = await signAndSendFeature.signAndSendTransaction({
+            transaction,
+            account: wsAccount,
+            chain: 'solana:devnet',
+            options: { skipPreflight: true },
+          });
+          // Wallet Standard may return array or single result
+          const result = Array.isArray(sendResults) ? sendResults[0] : sendResults;
+          return result.signature;
+        } catch (wsError) {
+          const errorMsg = wsError instanceof Error
+            ? wsError.message
+            : typeof wsError === 'object' && wsError !== null
+              ? JSON.stringify(wsError)
+              : String(wsError);
+          throw new Error(`Wallet transaction failed: ${errorMsg}`);
+        }
       }
 
       throw new Error('Wallet does not support transaction signing');
@@ -479,9 +755,16 @@ export function WalletProvider({ children }: WalletProviderProps) {
   useEffect(() => {
     if (hasAutoConnected) return;
 
-    const wasConnected = localStorage.getItem(WALLET_CONNECTED_KEY) === 'true';
+    const wasConnected = localStorage.getItem(WALLET_CONNECTED_KEY);
     if (wasConnected && !isConnected && !isConnecting) {
       setHasAutoConnected(true);
+
+      if (wasConnected === 'dev') {
+        // Reconnect dev wallet from stored key
+        connectDevWallet();
+        return;
+      }
+
       // Small delay to let wallet extensions initialize
       const timer = setTimeout(() => {
         connect().catch((err) => {
@@ -492,7 +775,7 @@ export function WalletProvider({ children }: WalletProviderProps) {
       }, 500);
       return () => clearTimeout(timer);
     }
-  }, [hasAutoConnected, isConnected, isConnecting, connect]);
+  }, [hasAutoConnected, isConnected, isConnecting, connect, connectDevWallet]);
 
   return (
     <WalletContext.Provider
@@ -503,6 +786,7 @@ export function WalletProvider({ children }: WalletProviderProps) {
         isConnected,
         isConnecting,
         connect,
+        connectDevWallet,
         disconnect,
         signMessage,
         signAndSendTransaction,

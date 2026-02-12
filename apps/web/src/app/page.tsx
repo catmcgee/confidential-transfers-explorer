@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useMemo } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { ActivityTable } from '@/components/ActivityTable';
 import { TypeFilter } from '@/components/TypeFilter';
 import { LoadingSpinner } from '@/components/LoadingSpinner';
@@ -8,10 +8,65 @@ import { TransferModal } from '@/components/TransferModal';
 import { useWallet } from '@/components/WalletProvider';
 import { useFeed } from '@/hooks/useFeed';
 
+const KONAMI_SEQUENCE = ['ArrowUp', 'ArrowUp', 'ArrowDown', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'ArrowLeft', 'ArrowRight', 'b', 'a'];
+const TITLE_TEXT = 'Confidential Transfers';
+
 export default function HomePage() {
   const { publicKey, isConnected } = useWallet();
   const [typeFilter, setTypeFilter] = useState('all');
   const [isTransferModalOpen, setIsTransferModalOpen] = useState(false);
+
+  // Easter egg: Konami code reveals encrypted amounts as 👀
+  const [konamiActive, setKonamiActive] = useState(false);
+  const konamiIndex = useRef(0);
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === KONAMI_SEQUENCE[konamiIndex.current]) {
+        konamiIndex.current++;
+        if (konamiIndex.current === KONAMI_SEQUENCE.length) {
+          konamiIndex.current = 0;
+          setKonamiActive(true);
+          setTimeout(() => setKonamiActive(false), 3000);
+        }
+      } else {
+        konamiIndex.current = 0;
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
+
+  // Easter egg: click title 3 times for cipher scramble
+  const [titleDisplay, setTitleDisplay] = useState(TITLE_TEXT);
+  const titleClicks = useRef(0);
+  const titleTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const handleTitleClick = useCallback(() => {
+    titleClicks.current++;
+    if (titleTimeout.current) clearTimeout(titleTimeout.current);
+    titleTimeout.current = setTimeout(() => { titleClicks.current = 0; }, 800);
+
+    if (titleClicks.current >= 3) {
+      titleClicks.current = 0;
+      const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*';
+      let iterations = 0;
+      const interval = setInterval(() => {
+        setTitleDisplay(
+          TITLE_TEXT.split('').map((char, i) => {
+            if (char === ' ') return ' ';
+            if (i < iterations) return TITLE_TEXT[i];
+            return chars[Math.floor(Math.random() * chars.length)];
+          }).join('')
+        );
+        iterations += 0.5;
+        if (iterations > TITLE_TEXT.length) {
+          clearInterval(interval);
+          setTitleDisplay(TITLE_TEXT);
+        }
+      }, 30);
+    }
+  }, []);
 
   // Determine the actual filter to use
   const actualTypeFilter = typeFilter === 'mine' ? 'all' : typeFilter;
@@ -21,27 +76,21 @@ export default function HomePage() {
     limit: 50,
     autoRefresh: true,
     refreshInterval: 15000,
+    address: typeFilter === 'mine' ? publicKey ?? undefined : undefined,
   });
 
-  // Filter for "mine" if selected
-  const filteredActivities = useMemo(() => {
-    if (typeFilter !== 'mine' || !publicKey) return activities;
-
-    return activities.filter(activity =>
-      activity.sourceOwner === publicKey ||
-      activity.destOwner === publicKey ||
-      activity.sourceTokenAccount === publicKey ||
-      activity.destTokenAccount === publicKey
-    );
-  }, [activities, typeFilter, publicKey]);
+  const filteredActivities = activities;
 
   return (
     <div className="min-h-[calc(100vh-80px)]">
       {/* Compact header section */}
       <div className="flex items-center justify-between py-6 border-b border-zinc-800/50">
         <div>
-          <h1 className="text-lg font-medium text-zinc-100 tracking-tight">
-            Confidential Transfers
+          <h1
+            className="text-lg font-medium text-zinc-100 tracking-tight cursor-default select-none"
+            onClick={handleTitleClick}
+          >
+            {titleDisplay}
           </h1>
           <p className="text-xs text-zinc-500 mt-0.5 font-mono">
             Token-2022 encrypted activity on zk-edge
@@ -110,11 +159,19 @@ export default function HomePage() {
                 Retry
               </button>
             </div>
+          ) : isLoading && filteredActivities.length === 0 ? (
+            <div className="p-12 flex flex-col items-center justify-center gap-3">
+              <LoadingSpinner size="md" />
+              <p className="text-xs text-zinc-500 font-mono">
+Fetching...
+              </p>
+            </div>
           ) : (
             <>
               <ActivityTable
                 activities={filteredActivities}
                 highlightAddress={publicKey || undefined}
+                konamiActive={konamiActive}
               />
 
               {hasMore && typeFilter !== 'mine' && (

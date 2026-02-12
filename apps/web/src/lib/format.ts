@@ -44,17 +44,27 @@ export function formatRelativeTime(timestamp: number | null): string {
 export function formatAmount(amount: string | null, decimals: number = 9): string {
   if (!amount) return '0';
 
-  const num = BigInt(amount);
-  const divisor = BigInt(10 ** decimals);
-  const whole = num / divisor;
-  const fraction = num % divisor;
-
-  if (fraction === 0n) {
-    return whole.toString();
+  // If the amount already contains a decimal point, it's already formatted
+  if (amount.includes('.')) {
+    return amount;
   }
 
-  const fractionStr = fraction.toString().padStart(decimals, '0').replace(/0+$/, '');
-  return `${whole}.${fractionStr}`;
+  try {
+    const num = BigInt(amount);
+    const divisor = BigInt(10 ** decimals);
+    const whole = num / divisor;
+    const fraction = num % divisor;
+
+    if (fraction === 0n) {
+      return whole.toString();
+    }
+
+    const fractionStr = fraction.toString().padStart(decimals, '0').replace(/0+$/, '');
+    return `${whole}.${fractionStr}`;
+  } catch {
+    // Fallback for values that can't be converted to BigInt
+    return amount;
+  }
 }
 
 /**

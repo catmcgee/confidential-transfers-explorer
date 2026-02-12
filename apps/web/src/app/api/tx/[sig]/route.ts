@@ -6,6 +6,9 @@ import type {
   RawInstructionSummary,
 } from '@ct-explorer/shared';
 import { getActivitiesBySignature } from '@/lib/db';
+import { fetchTransactionFromRpc } from '@/lib/rpc';
+
+const TOKEN_2022_PROGRAM = 'TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb';
 
 export async function GET(
   _request: NextRequest,
@@ -26,6 +29,20 @@ export async function GET(
     const activities = getActivitiesBySignature(sig);
 
     if (activities.length === 0) {
+      // Fallback: fetch directly from RPC
+      const rpcActivities = await fetchTransactionFromRpc(sig);
+      if (rpcActivities.length > 0) {
+        const first = rpcActivities[0]!;
+        const response: TransactionDetailResponse = {
+          signature: sig,
+          slot: first.slot,
+          blockTime: first.blockTime,
+          timestamp: first.timestamp,
+          activities: rpcActivities,
+          rawInstructions: [],
+        };
+        return NextResponse.json(apiResponse(response));
+      }
       return NextResponse.json(apiError('Transaction not found', 'NOT_FOUND'), {
         status: 404,
       });
@@ -55,7 +72,7 @@ export async function GET(
     const rawInstructions: RawInstructionSummary[] = activities
       .filter((a) => a.instructionData)
       .map((a) => ({
-        programId: 'TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb',
+        programId: TOKEN_2022_PROGRAM,
         data: a.instructionData!,
         accounts: [
           a.sourceTokenAccount,

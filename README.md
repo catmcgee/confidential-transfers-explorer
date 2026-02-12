@@ -7,16 +7,18 @@ A simple, clean indexer and explorer for Token-2022 Confidential Transfer activi
 - **Public Explorer**: View global feed of CT activity with encrypted amounts
 - **Address Pages**: See CT activity for any address
 - **Wallet Integration**: Connect via Wallet Standard
-- **Client-Side Decryption**: Unlock your own data with your decryption keys (keys never leave browser)
+- **Confidential Transfers**: Full support for ZK proof-based confidential transfers
+- **Client-Side Decryption**: Unlock your own data with wallet signatures
 - **REST API**: Programmatic access for wallets and businesses
 
 ## Architecture
 
 ```
-ct-explorer/
+conf-transfers-explorer/
 ├── apps/
 │   ├── indexer/     # Node service that indexes chain → SQLite
 │   └── web/         # Next.js app serving UI + API
+├── rust-ct/         # Rust API server for ZK proof generation
 ├── packages/
 │   └── shared/      # Shared types, schemas, constants
 └── data/            # SQLite database (created at runtime)
@@ -26,6 +28,7 @@ ct-explorer/
 
 - **Frontend**: Next.js 15, React 19, Tailwind CSS
 - **Backend**: Next.js API Routes
+- **ZK Proofs**: Rust API server using `spl-token-2022` and `solana-zk-sdk`
 - **Indexer**: Bun with @solana/rpc (Anza Kit)
 - **Database**: SQLite via better-sqlite3
 - **Auth**: JWT sessions with wallet signature verification
@@ -35,6 +38,7 @@ ct-explorer/
 ### Prerequisites
 
 - Bun 1.0+
+- Rust 1.70+ (for the ZK proof API server)
 - A Solana wallet with custom RPC support (Backpack or Solflare recommended)
 
 ### Installation
@@ -42,64 +46,83 @@ ct-explorer/
 ```bash
 # Clone the repo
 git clone <repo-url>
-cd ct-explorer
+cd conf-transfers-explorer
 
-# Install dependencies
+# Install JavaScript dependencies
 bun install
 
-# Build shared package
-bun run build:shared
+# Build Rust API server
+cd rust-ct && cargo build --release
 ```
 
 ### Environment Setup
 
 ```bash
 # Copy environment files
-cp .env.example .env
-cp apps/indexer/.env.example apps/indexer/.env
 cp apps/web/.env.example apps/web/.env
 
 # Edit .env files as needed (defaults work for local dev)
-```
-
-### Database Setup
-
-```bash
-# Initialize database with schema
-bun run db:migrate
-
-# Optional: Add sample data for testing
-bun run db:seed
+# Key environment variables:
+# - NEXT_PUBLIC_SOLANA_RPC_URL: Solana RPC endpoint (default: https://zk-edge.surfnet.dev:8899)
+# - NEXT_PUBLIC_RUST_API_URL: Rust API endpoint (default: http://localhost:3002)
 ```
 
 ### Running the Application
 
-#### Development (two terminals)
+You need to run **two services**:
 
-Terminal 1 - Indexer:
+#### Terminal 1 - Rust API Server (ZK Proofs)
+
 ```bash
-bun run dev:indexer
+cd rust-ct
+cargo run --bin api-server
 ```
 
-Terminal 2 - Web App:
+This starts the Rust API on http://localhost:3002 which handles:
+- ElGamal key derivation
+- ZK proof generation for transfers
+- Balance encryption/decryption
+
+#### Terminal 2 - Web App
+
 ```bash
-bun run dev:web
+cd apps/web
+bun dev
 ```
 
 Open http://localhost:3000
 
-#### Production Build
+### Quick Start (Both Services)
 
 ```bash
-# Build all packages
-bun run build
-
-# Run indexer
-cd apps/indexer && bun run start
-
-# Run web (in another terminal)
-cd apps/web && bun run start
+# In one terminal, start both services:
+cd rust-ct && cargo run --bin api-server &
+cd apps/web && bun dev
 ```
+
+## Confidential Transfer Operations
+
+The app supports all confidential transfer operations:
+
+### 1. Configure Account
+Enables confidential transfers on a token account by:
+- Deriving ElGamal keypair from wallet signature
+- Generating pubkey validity proof
+- Reallocating account space for CT extension
+
+### 2. Deposit
+Moves tokens from public balance to confidential pending balance.
+
+### 3. Apply Pending Balance
+Moves tokens from pending to available confidential balance (required before transfers).
+
+### 4. Confidential Transfer
+Sends confidential tokens using 5 split-proof transactions:
+1. Create & verify equality proof
+2. Create & verify validity proof
+3. Create range proof context
+4. Verify range proof
+5. Execute transfer & close contexts
 
 ## API Endpoints
 
@@ -127,6 +150,24 @@ cd apps/web && bun run start
 | `POST /api/auth/logout` | Clear session |
 | `GET /api/auth/session` | Check current session |
 
+### Faucet Endpoint
+
+| Endpoint | Description |
+|----------|-------------|
+| `POST /api/faucet` | Request test tokens (devnet only) |
+
+### Rust API Endpoints (localhost:3002)
+
+| Endpoint | Description |
+|----------|-------------|
+| `POST /derive-keys` | Derive ElGamal pubkey from wallet signature |
+| `POST /generate-pubkey-validity-proof` | Generate proof for Configure CT |
+| `POST /encrypt-balance` | Encrypt balance with AES (for Apply Pending) |
+| `POST /decrypt-balance` | Decrypt pending/available balances |
+| `POST /generate-transfer-proofs` | Generate all ZK proofs for transfer |
+| `POST /account-info` | Get account info with decrypted balances |
+| `GET /health` | Health check |
+
 ## How CT Data is Detected
 
 The indexer monitors the Token-2022 program for Confidential Transfer extension instructions:
@@ -143,17 +184,14 @@ The indexer monitors the Token-2022 program for Confidential Transfer extension 
 
 4. **Ciphertext Extraction**: For transfers, ElGamal ciphertexts are extracted from instruction data and stored as base64.
 
-## Client-Side Decryption
+## Client-Side Key Derivation
 
-The decryption feature allows users to view their own encrypted data:
+Keys are derived from wallet signatures (never leave the browser):
 
-1. **Key Material**: Users provide their ElGamal secret key (derived from wallet signature)
-2. **Local Storage**: Key is stored encrypted in browser localStorage
-3. **Decryption**: All decryption happens client-side using WebCrypto
+1. **ElGamal Key**: Sign message `"ElGamalSecretKey" + tokenAccountAddress`
+2. **AES Key**: Sign message `"AeKey" + tokenAccountAddress`
 
-### Key Derivation
-
-To derive your ElGamal secret key, sign the message `"ElGamalSecretKey"` with your wallet using your token account address as context. The resulting signature is used to derive the key.
+These signatures are sent to the Rust API which derives the actual cryptographic keys using the same algorithm as the Solana CLI.
 
 ## Wallet Setup (Custom RPC)
 
@@ -174,7 +212,7 @@ To interact with a custom Solana network like zk-edge, you need a wallet that su
 
 ## Security Notes
 
-- **Keys Never Leave Browser**: Decryption key material is never sent to the server
+- **Keys Never Leave Browser**: Only signatures are sent to the Rust API, which derives keys locally
 - **Signature Verification**: Login requires signing a timestamped message
 - **Session Tokens**: JWTs are httpOnly cookies with 24h expiration
 - **Read-Only Database**: Web app opens database in read-only mode
@@ -184,15 +222,12 @@ To interact with a custom Solana network like zk-edge, you need a wallet that su
 ### Project Scripts
 
 ```bash
-bun run dev:web          # Start web app in dev mode
-bun run dev:indexer      # Start indexer in dev mode
+bun run dev              # Start web app in dev mode (from apps/web)
+cargo run --bin api-server  # Start Rust API (from rust-ct)
 bun run build            # Build all packages
-bun run build:shared     # Build shared package only
 bun run lint             # Lint all packages
 bun run format           # Format code with Prettier
 bun run typecheck        # Run TypeScript type checking
-bun run db:migrate       # Run database migrations
-bun run db:seed          # Seed database with sample data
 ```
 
 ### Adding New Features
@@ -200,7 +235,21 @@ bun run db:seed          # Seed database with sample data
 1. Add shared types to `packages/shared/src/types.ts`
 2. Add API routes in `apps/web/src/app/api/`
 3. Add UI components in `apps/web/src/components/`
-4. Add hooks in `apps/web/src/hooks/`
+4. Add Rust endpoints in `rust-ct/src/bin/api_server.rs`
+
+## Troubleshooting
+
+### "Failed to derive keys" or API errors
+Make sure the Rust API server is running on port 3002:
+```bash
+cd rust-ct && cargo run --bin api-server
+```
+
+### Transaction too large errors
+The zk-edge RPC supports larger transactions (4KB) needed for ZK proofs. Make sure your wallet is connected to `https://zk-edge.surfnet.dev:8899`.
+
+### Balance mismatch errors
+This usually means the account was configured with different keys. Create a new account and configure it from the web frontend.
 
 ## License
 

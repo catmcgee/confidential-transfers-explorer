@@ -1,7 +1,7 @@
 'use client';
 
-import Link from 'next/link';
-import { useState } from 'react';
+import { useRouter } from 'next/navigation';
+import { useState, useRef } from 'react';
 import type { CTActivityResponse } from '@ct-explorer/shared';
 import {
   shortenAddress,
@@ -16,6 +16,31 @@ interface ActivityTableProps {
   showMint?: boolean;
   highlightAddress?: string;
   decryptedAmounts?: Map<number, string>;
+  konamiActive?: boolean;
+}
+
+function EncryptedAmount({ konamiActive }: { konamiActive?: boolean }) {
+  const [showEmoji, setShowEmoji] = useState(false);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  if (konamiActive) {
+    return <span className="text-sm not-italic">👀</span>;
+  }
+
+  return (
+    <span
+      className="text-zinc-600 text-xs italic cursor-default"
+      onMouseEnter={() => {
+        timerRef.current = setTimeout(() => setShowEmoji(true), 3000);
+      }}
+      onMouseLeave={() => {
+        if (timerRef.current) clearTimeout(timerRef.current);
+        setShowEmoji(false);
+      }}
+    >
+      {showEmoji ? '🤫' : 'encrypted'}
+    </span>
+  );
 }
 
 function CopyButton({ text }: { text: string }) {
@@ -53,7 +78,9 @@ export function ActivityTable({
   showMint = true,
   highlightAddress,
   decryptedAmounts,
+  konamiActive,
 }: ActivityTableProps) {
+  const router = useRouter();
   if (activities.length === 0) {
     return (
       <div className="text-center py-12 text-zinc-600">
@@ -88,7 +115,11 @@ export function ActivityTable({
                 activity.destTokenAccount === highlightAddress);
 
             return (
-              <tr key={activity.id} className={activity.isOptimistic ? 'opacity-60 animate-pulse' : ''}>
+              <tr
+                key={activity.id}
+                className={`${activity.isOptimistic ? 'opacity-60 animate-pulse' : 'cursor-pointer hover:bg-zinc-800/50'}`}
+                onClick={() => !activity.isOptimistic && router.push(`/tx/${activity.signature}`)}
+              >
                 <td>
                   <div className="flex items-center">
                     {activity.isOptimistic ? (
@@ -97,12 +128,9 @@ export function ActivityTable({
                         {shortenSignature(activity.signature, 12)}
                       </span>
                     ) : (
-                      <Link
-                        href={`/tx/${activity.signature}`}
-                        className="font-mono text-xs text-zinc-400 hover:text-zinc-200 transition-colors"
-                      >
+                      <span className="font-mono text-xs text-zinc-400">
                         {shortenSignature(activity.signature, 12)}
-                      </Link>
+                      </span>
                     )}
                     <CopyButton text={activity.signature} />
                   </div>
@@ -157,7 +185,7 @@ export function ActivityTable({
                   {decryptedAmount ? (
                     <span className="text-emerald-400 font-mono text-xs">{formatAmount(decryptedAmount)}</span>
                   ) : activity.amount === 'confidential' ? (
-                    <span className="text-zinc-600 text-xs italic">encrypted</span>
+                    <EncryptedAmount konamiActive={konamiActive} />
                   ) : (
                     <span className="text-zinc-300 font-mono text-xs">{formatAmount(activity.amount)}</span>
                   )}

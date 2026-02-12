@@ -2,6 +2,7 @@
 
 import { useState, useEffect, use } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import type { TransactionDetailResponse, CTActivityResponse } from '@ct-explorer/shared';
 import { LoadingPage } from '@/components/LoadingSpinner';
 import {
@@ -44,6 +45,7 @@ function CopyButton({ text }: { text: string }) {
 
 export default function TxPage({ params }: TxPageProps) {
   const { sig } = use(params);
+  const router = useRouter();
   const [tx, setTx] = useState<TransactionDetailResponse | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -90,6 +92,17 @@ export default function TxPage({ params }: TxPageProps) {
 
   return (
     <div className="space-y-4">
+      {/* Back button */}
+      <button
+        onClick={() => router.back()}
+        className="flex items-center gap-1.5 text-xs text-zinc-500 hover:text-zinc-300 transition-colors"
+      >
+        <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+        </svg>
+        Back
+      </button>
+
       {/* Header */}
       <div className="border border-zinc-800 rounded-lg p-5">
         <div className="flex flex-col gap-4">

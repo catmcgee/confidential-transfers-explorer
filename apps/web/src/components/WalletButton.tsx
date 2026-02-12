@@ -5,7 +5,7 @@ import { useWallet } from './WalletProvider';
 import { shortenAddress } from '@/lib/format';
 
 export function WalletButton() {
-  const { publicKey, isConnected, isConnecting, connect, disconnect } = useWallet();
+  const { publicKey, isConnected, isConnecting, connect, disconnect, wallet } = useWallet();
   const [showMenu, setShowMenu] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
 
@@ -53,7 +53,7 @@ export function WalletButton() {
         onClick={() => setShowMenu(!showMenu)}
         className="flex items-center gap-2 px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 rounded transition-colors"
       >
-        <div className="w-5 h-5 bg-gradient-to-br from-emerald-400 to-teal-500 rounded-full" />
+        <div className={`w-5 h-5 rounded-full ${wallet?.name === 'Dev Wallet' ? 'bg-gradient-to-br from-orange-400 to-amber-500' : 'bg-gradient-to-br from-emerald-400 to-teal-500'}`} />
         <span className="font-mono text-xs text-zinc-200">
           {shortenAddress(publicKey!, 4)}
         </span>

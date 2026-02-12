@@ -1,13 +1,18 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import type { CTActivityResponse } from '@ct-explorer/shared';
+
+// In-memory cache for RPC-based address queries (survives filter switches)
+const addressCache = new Map<string, { activities: CTActivityResponse[]; timestamp: number }>();
+const CACHE_TTL = 60000; // 1 minute
 
 interface UseFeedOptions {
   type?: string;
   limit?: number;
   autoRefresh?: boolean;
   refreshInterval?: number;
+  address?: string;
 }
 
 interface UseFeedResult {
@@ -21,7 +26,7 @@ interface UseFeedResult {
 }
 
 export function useFeed(options: UseFeedOptions = {}): UseFeedResult {
-  const { type = 'all', limit = 50, autoRefresh = false, refreshInterval = 30000 } = options;
+  const { type = 'all', limit = 50, autoRefresh = false, refreshInterval = 30000, address } = options;
 
   const [activities, setActivities] = useState<CTActivityResponse[]>([]);
   const [cursor, setCursor] = useState<number | null>(null);
@@ -38,6 +43,9 @@ export function useFeed(options: UseFeedOptions = {}): UseFeedResult {
         if (currentCursor) {
           params.set('cursor', currentCursor.toString());
         }
+        if (address) {
+          params.set('address', address);
+        }
 
         const response = await fetch(`/api/feed?${params}`);
         const data = await response.json();
@@ -51,20 +59,37 @@ export function useFeed(options: UseFeedOptions = {}): UseFeedResult {
         throw err;
       }
     },
-    [limit, type]
+    [limit, type, address]
   );
 
   // Initial fetch
   useEffect(() => {
     const loadInitial = async () => {
+      // Check cache for address queries
+      if (address) {
+        const cached = addressCache.get(address);
+        if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
+          setActivities(cached.activities);
+          setCursor(null);
+          setHasMore(false);
+          setIsLoading(false);
+          return;
+        }
+      }
+
       setIsLoading(true);
       setError(null);
+      setActivities([]); // Clear stale data while loading
 
       try {
         const result = await fetchFeed();
         setActivities(result.activities);
         setCursor(result.cursor);
         setHasMore(result.hasMore);
+        // Cache address query results
+        if (address) {
+          addressCache.set(address, { activities: result.activities, timestamp: Date.now() });
+        }
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Failed to load feed');
       } finally {
@@ -73,20 +98,20 @@ export function useFeed(options: UseFeedOptions = {}): UseFeedResult {
     };
 
     loadInitial();
-  }, [fetchFeed]);
+  }, [fetchFeed, address]);
 
-  // Auto-refresh
+  // Auto-refresh (skip for RPC-based address queries to avoid duplicates)
   useEffect(() => {
-    if (!autoRefresh) return;
+    if (!autoRefresh || address) return;
 
     const interval = setInterval(async () => {
       try {
         const result = await fetchFeed();
         // Only update if we have new activities
         if (result.activities.length > 0) {
-          const existingIds = new Set(activities.map((a) => a.id));
+          const existingSigs = new Set(activities.map((a) => a.signature));
           const newActivities = result.activities.filter(
-            (a: CTActivityResponse) => !existingIds.has(a.id)
+            (a: CTActivityResponse) => !existingSigs.has(a.signature)
           );
           if (newActivities.length > 0) {
             setActivities((prev) => [...newActivities, ...prev]);
@@ -98,7 +123,7 @@ export function useFeed(options: UseFeedOptions = {}): UseFeedResult {
     }, refreshInterval);
 
     return () => clearInterval(interval);
-  }, [autoRefresh, refreshInterval, fetchFeed, activities]);
+  }, [autoRefresh, refreshInterval, fetchFeed, activities, address]);
 
   const loadMore = useCallback(async () => {
     if (!cursor || isLoading) return;
@@ -135,6 +160,8 @@ export function useFeed(options: UseFeedOptions = {}): UseFeedResult {
   // Add an optimistic activity to the top of the feed
   const addOptimisticActivity = useCallback(
     (activity: Partial<CTActivityResponse> & { signature: string }) => {
+      // Invalidate address cache so Mine tab refreshes
+      addressCache.clear();
       const optimisticActivity: CTActivityResponse = {
         id: Date.now(), // Temporary ID
         signature: activity.signature,
