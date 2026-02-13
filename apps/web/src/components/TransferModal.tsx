@@ -258,17 +258,11 @@ export function TransferModal({ isOpen, onClose, onTransferComplete }: TransferM
       console.log('Raw decrypted pendingHi:', pendingHi?.toString());
 
       if (pendingLo !== null && pendingHi !== null) {
-        const pendingBalance = pendingLo + (pendingHi << 48n);
+        const pendingBalance = pendingLo + (pendingHi << 16n);
         console.log('Decrypted pending balance:', pendingBalance.toString());
         // Sanity check: ElGamal BSGS decrypt can return garbage for values > 2^32
         // If the result looks unreasonable, set to null to trigger manual entry
-        const MAX_RELIABLE = (1n << 32n);
-        if (pendingLo > MAX_RELIABLE || pendingBalance > MAX_RELIABLE * 2n) {
-          console.warn('Pending balance decrypt may be unreliable (value > 2^32 BSGS range)');
-          setDecryptedPendingBalance(null);
-        } else {
-          setDecryptedPendingBalance(pendingBalance);
-        }
+        setDecryptedPendingBalance(pendingBalance);
       } else {
         console.log('Could not decrypt pending balance (key mismatch or zero ciphertext)');
         setDecryptedPendingBalance(0n);
@@ -492,7 +486,7 @@ export function TransferModal({ isOpen, onClose, onTransferComplete }: TransferM
             const lo = await decryptElGamalBalance(secretKey, pendingLoCt);
             const hi = await decryptElGamalBalance(secretKey, pendingHiCt);
             if (lo !== null) {
-              pendingAmount = lo + ((hi ?? 0n) << 48n);
+              pendingAmount = lo + ((hi ?? 0n) << 16n);
             }
           }
         } catch (decryptErr) {
