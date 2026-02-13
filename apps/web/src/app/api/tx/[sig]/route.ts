@@ -26,7 +26,7 @@ export async function GET(
     }
 
     // Get activities from database
-    const activities = getActivitiesBySignature(sig);
+    const activities = await getActivitiesBySignature(sig);
 
     if (activities.length === 0) {
       // Fallback: fetch directly from RPC

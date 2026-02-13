@@ -36,7 +36,7 @@ export async function GET(
     const { limit, cursor, type } = parseResult.data;
 
     // Get activities from database
-    const result = getActivityByAddress(pubkey, limit, cursor, type);
+    const result = await getActivityByAddress(pubkey, limit, cursor, type);
 
     // Transform to response format
     const activities: CTActivityResponse[] = result.activities.map((a) => ({

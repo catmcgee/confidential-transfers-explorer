@@ -3,6 +3,7 @@ import { dirname } from 'path';
 import { loadConfig } from './config.js';
 import { CTIndexer } from './indexer.js';
 import { getDatabase } from './db/database.js';
+import { startApiServer } from './server.js';
 
 async function main() {
   console.log('='.repeat(50));
@@ -29,6 +30,10 @@ async function main() {
   console.log(`  Batch size: ${config.batchSize}`);
   console.log(`  Poll interval: ${config.pollIntervalMs}ms`);
   console.log(`  Backfill count: ${config.backfillSignatures}`);
+
+  // Start API server so the web service can query indexed data
+  const apiPort = parseInt(process.env['API_PORT'] || '3001', 10);
+  startApiServer(db, apiPort);
 
   // Create and start indexer
   const indexer = new CTIndexer(config);

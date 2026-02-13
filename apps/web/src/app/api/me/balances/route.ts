@@ -15,11 +15,11 @@ export async function GET() {
     }
 
     // Get token accounts owned by the user
-    const tokenAccounts = getTokenAccountsByOwner(session.publicKey);
+    const tokenAccounts = await getTokenAccountsByOwner(session.publicKey);
 
     // Build response with mint info
-    const accountInfo: UserTokenAccountInfo[] = tokenAccounts.map((account) => {
-      const mint = getMint(account.mint);
+    const accountInfo: UserTokenAccountInfo[] = await Promise.all(tokenAccounts.map(async (account) => {
+      const mint = await getMint(account.mint);
 
       return {
         address: account.address,
@@ -34,7 +34,7 @@ export async function GET() {
         availableBalance: 'encrypted',
         publicBalance: null, // Would need RPC call to get actual value
       };
-    });
+    }));
 
     const response: UserBalancesResponse = {
       publicKey: session.publicKey,

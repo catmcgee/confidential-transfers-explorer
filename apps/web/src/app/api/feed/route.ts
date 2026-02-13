@@ -4,6 +4,8 @@ import type { CTActivityResponse, FeedResponse } from '@ct-explorer/shared';
 import { getFeed } from '@/lib/db';
 import { fetchActivitiesForAddress } from '@/lib/rpc';
 
+const TOKEN_2022_PROGRAM = 'TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb';
+
 export async function GET(request: NextRequest) {
   try {
     const searchParams = request.nextUrl.searchParams;
@@ -44,30 +46,47 @@ export async function GET(request: NextRequest) {
     const { limit, cursor, type } = parseResult.data;
 
     // Get feed from database
-    const result = getFeed(limit, cursor, type);
+    const result = await getFeed(limit, cursor, type);
 
-    // Transform to response format
-    const activities: CTActivityResponse[] = result.activities.map((a) => ({
-      id: a.id,
-      signature: a.signature,
-      slot: a.slot,
-      blockTime: a.blockTime,
-      timestamp: a.blockTime ? new Date(a.blockTime * 1000).toISOString() : null,
-      instructionType: a.instructionType,
-      mint: a.mint,
-      sourceOwner: a.sourceOwner,
-      destOwner: a.destOwner,
-      sourceTokenAccount: a.sourceTokenAccount,
-      destTokenAccount: a.destTokenAccount,
-      amount: a.publicAmount ? a.publicAmount : 'confidential',
-      ciphertextLo: a.ciphertextLo,
-      ciphertextHi: a.ciphertextHi,
-    }));
+    // If DB returned results, use them
+    if (result.activities.length > 0) {
+      const activities: CTActivityResponse[] = result.activities.map((a) => ({
+        id: a.id,
+        signature: a.signature,
+        slot: a.slot,
+        blockTime: a.blockTime,
+        timestamp: a.blockTime ? new Date(a.blockTime * 1000).toISOString() : null,
+        instructionType: a.instructionType,
+        mint: a.mint,
+        sourceOwner: a.sourceOwner,
+        destOwner: a.destOwner,
+        sourceTokenAccount: a.sourceTokenAccount,
+        destTokenAccount: a.destTokenAccount,
+        amount: a.publicAmount ? a.publicAmount : 'confidential',
+        ciphertextLo: a.ciphertextLo,
+        ciphertextHi: a.ciphertextHi,
+      }));
+
+      const response: FeedResponse = {
+        activities,
+        cursor: result.nextCursor,
+        hasMore: result.nextCursor !== null,
+      };
+
+      return NextResponse.json(apiResponse(response));
+    }
+
+    // DB is empty or unavailable — fall back to RPC
+    // Fetch recent activity from the Token-2022 program
+    const rpcActivities = await fetchActivitiesForAddress(TOKEN_2022_PROGRAM, limit);
+    const filtered = type === 'all'
+      ? rpcActivities
+      : rpcActivities.filter((a) => a.instructionType === type);
 
     const response: FeedResponse = {
-      activities,
-      cursor: result.nextCursor,
-      hasMore: result.nextCursor !== null,
+      activities: filtered.slice(0, limit),
+      cursor: null,
+      hasMore: false,
     };
 
     return NextResponse.json(apiResponse(response));

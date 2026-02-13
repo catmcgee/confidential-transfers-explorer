@@ -5,7 +5,7 @@ import { getMints } from '@/lib/db';
 
 export async function GET() {
   try {
-    const mints = getMints();
+    const mints = await getMints();
 
     const response: MintsResponse = {
       mints: mints.map((m) => ({

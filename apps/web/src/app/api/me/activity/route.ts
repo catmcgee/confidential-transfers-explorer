@@ -32,7 +32,7 @@ export async function GET(request: NextRequest) {
     const { limit, cursor, type } = parseResult.data;
 
     // Get activities for the authenticated user
-    const result = getActivityByAddress(session.publicKey, limit, cursor, type);
+    const result = await getActivityByAddress(session.publicKey, limit, cursor, type);
 
     // Transform to response format
     const activities: CTActivityResponse[] = result.activities.map((a) => ({
