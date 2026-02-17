@@ -3,6 +3,33 @@ import type { CTActivityResponse } from '@ct-explorer/shared';
 const RPC_URL = process.env['NEXT_PUBLIC_SOLANA_RPC_URL'] || 'https://zk-edge.surfnet.dev:8899';
 const TOKEN_2022_PROGRAM = 'TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb';
 
+// Simple in-memory TTL cache to avoid hammering the RPC on every request
+const cache = new Map<string, { data: unknown; expiry: number }>();
+
+function cacheGet<T>(key: string): T | undefined {
+  const entry = cache.get(key);
+  if (!entry) return undefined;
+  if (Date.now() > entry.expiry) {
+    cache.delete(key);
+    return undefined;
+  }
+  return entry.data as T;
+}
+
+function cacheSet(key: string, data: unknown, ttlMs: number) {
+  cache.set(key, { data, expiry: Date.now() + ttlMs });
+  // Prevent unbounded growth — evict expired entries periodically
+  if (cache.size > 200) {
+    const now = Date.now();
+    for (const [k, v] of cache) {
+      if (now > v.expiry) cache.delete(k);
+    }
+  }
+}
+
+const FEED_TTL = 10_000;     // 10s for feed/address activity
+const TX_TTL = 5 * 60_000;   // 5min for individual transactions (immutable once confirmed)
+
 const CT_INSTRUCTION_NAMES: Record<number, string> = {
   0: 'Configure',
   1: 'Approve',
@@ -146,13 +173,19 @@ export function parseTransactionActivities(sig: string, txData: any): CTActivity
  * Fetch a single transaction from RPC and parse CT activities.
  */
 export async function fetchTransactionFromRpc(sig: string): Promise<CTActivityResponse[]> {
+  const cacheKey = `tx:${sig}`;
+  const cached = cacheGet<CTActivityResponse[]>(cacheKey);
+  if (cached) return cached;
+
   try {
     const txData = await rpcCall('getTransaction', [
       sig,
       { encoding: 'jsonParsed', maxSupportedTransactionVersion: 0 },
     ]);
     if (!txData) return [];
-    return parseTransactionActivities(sig, txData);
+    const result = parseTransactionActivities(sig, txData);
+    if (result.length > 0) cacheSet(cacheKey, result, TX_TTL);
+    return result;
   } catch (err) {
     console.error('[RPC] fetchTransaction error:', err);
     return [];
@@ -167,6 +200,10 @@ export async function fetchActivitiesForAddress(
   address: string,
   limit: number = 50
 ): Promise<CTActivityResponse[]> {
+  const cacheKey = `addr:${address}:${limit}`;
+  const cached = cacheGet<CTActivityResponse[]>(cacheKey);
+  if (cached) return cached;
+
   try {
     // Get recent signatures
     const sigs = await rpcCall('getSignaturesForAddress', [
@@ -201,7 +238,9 @@ export async function fetchActivitiesForAddress(
 
     // Sort by slot descending and limit
     allActivities.sort((a, b) => (b.slot ?? 0) - (a.slot ?? 0));
-    return allActivities.slice(0, limit);
+    const result = allActivities.slice(0, limit);
+    if (result.length > 0) cacheSet(cacheKey, result, FEED_TTL);
+    return result;
   } catch (err) {
     console.error('[RPC] fetchActivitiesForAddress error:', err);
     return [];
