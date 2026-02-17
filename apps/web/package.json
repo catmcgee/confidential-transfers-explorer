@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "next dev",
-    "build": "cd ../../packages/shared && npx tsc && cd ../../apps/web && next build",
+    "build": "cd ../../packages/shared && bun run build && cd ../../apps/web && next build",
     "start": "next start",
     "lint": "next lint",
     "typecheck": "tsc --noEmit"
