@@ -171,15 +171,40 @@ export async function POST(request: Request) {
     );
 
     const signedTransaction = await signTransactionMessageWithSigners(transactionMessage);
+    // Preflight enabled: a bad config (e.g. missing mint or empty faucet
+    // account) must surface as an error, not a phantom "tokens sent".
     await rpc
       .sendTransaction(getBase64EncodedWireTransaction(signedTransaction), {
         encoding: 'base64',
-        skipPreflight: true,
+        skipPreflight: false,
+        preflightCommitment: 'confirmed',
       })
       .send();
     const signature = getSignatureFromTransaction(signedTransaction);
 
-    // Mark wallet as claimed
+    // Wait for the transaction to actually land before reporting success.
+    const deadline = Date.now() + 30_000;
+    let confirmed = false;
+    while (Date.now() < deadline) {
+      const { value } = await rpc.getSignatureStatuses([signature]).send();
+      const status = value[0];
+      if (status?.err) {
+        throw new Error(`Faucet transaction failed on-chain: ${JSON.stringify(status.err)}`);
+      }
+      if (
+        status?.confirmationStatus === 'confirmed' ||
+        status?.confirmationStatus === 'finalized'
+      ) {
+        confirmed = true;
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 1_500));
+    }
+    if (!confirmed) {
+      throw new Error('Faucet transaction was not confirmed in time. Please try again.');
+    }
+
+    // Mark wallet as claimed only after confirmed success
     walletsClaimed.add(walletAddress);
 
     console.log(`[Faucet] Sent ${FAUCET_AMOUNT} tokens + ${SOL_AMOUNT} SOL to ${walletAddress}: ${signature}`);
