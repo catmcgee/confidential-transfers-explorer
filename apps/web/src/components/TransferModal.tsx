@@ -81,7 +81,14 @@ interface TokenAccount {
   ctState?: CtAccountState;
 }
 
-const RPC_URL = process.env.NEXT_PUBLIC_SOLANA_RPC_URL || 'https://api.devnet.solana.com';
+// In the browser, go through our same-origin /api/rpc proxy: it forwards to
+// the private server-side RPC (SOLANA_RPC_URL), avoiding both the public
+// endpoint's rate limits and CORS-less 429s that surface as "Failed to
+// fetch" during multi-transaction transfer flows.
+const RPC_URL =
+  typeof window !== 'undefined'
+    ? `${window.location.origin}/api/rpc`
+    : process.env.NEXT_PUBLIC_SOLANA_RPC_URL || 'https://api.devnet.solana.com';
 const TOKEN_2022_PROGRAM_ID = 'TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb';
 
 // Single kit RPC client shared by all confidential-transfer operations.
