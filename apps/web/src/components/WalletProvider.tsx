@@ -12,11 +12,11 @@ import {
   useWalletConnectors,
   useWalletInfo,
 } from '@solana/connector/react';
-import { createMessageSignerFromWallet, createSolanaDevnet } from '@solana/connector/headless';
+import { createSolanaDevnet } from '@solana/connector/headless';
 import {
   address,
-  createSignableMessage,
   type MessagePartialSigner,
+  type SignatureBytes,
   type SignatureDictionary,
   type TransactionSigner,
 } from '@solana/kit';
@@ -78,73 +78,83 @@ function WalletContextBridge({ children }: { children: ReactNode }) {
   );
   const standardAccount = session?.selectedAccount.account ?? null;
 
-  // Wire the wallet's `solana:signMessage` feature into a kit message signer.
-  // NOTE: we call the feature directly with only { account, message } — the
-  // Wallet Standard signMessage input. ConnectorKit's createKitSignersFromWallet
-  // additionally passes a genesis-hash `chain` value that wallets reject,
-  // which surfaces as "Failed to sign message".
-  const walletMessageSigner = useMemo(() => {
-    if (!standardWallet || !standardAccount) return null;
-    const signFeature = standardWallet.features['solana:signMessage'] as
-      | {
-          signMessage: (input: {
-            account: typeof standardAccount;
-            message: Uint8Array;
-          }) => Promise<readonly { signature: Uint8Array }[]>;
-        }
-      | undefined;
-    if (!signFeature) return null;
-
-    return createMessageSignerFromWallet(address(standardAccount.address), async (message) => {
-      const results = await signFeature.signMessage({
-        account: standardAccount,
-        message: message instanceof Uint8Array ? message : new Uint8Array(message),
-      });
-      const signature = results?.[0]?.signature;
-      if (!signature) {
-        throw new Error('Wallet returned no signature');
-      }
-      return signature;
-    });
-  }, [standardWallet, standardAccount]);
-
-  // Raw bytes-in/bytes-out signing for auth login.
+  // Sign raw bytes with the wallet's `solana:signMessage` feature, calling it
+  // directly with the spec-compliant input ({ account, message } only — no
+  // chain param, which some wallets reject) and propagating the wallet's REAL
+  // error message instead of a generic "Failed to sign message".
   const signMessage = useCallback(
     async (message: Uint8Array): Promise<Uint8Array> => {
-      if (!walletMessageSigner) {
-        throw new Error('Wallet not connected or does not support message signing');
+      if (!standardWallet || !standardAccount) {
+        throw new Error('Wallet not connected');
       }
-      const [signed] = await walletMessageSigner.modifyAndSignMessages([
-        createSignableMessage(message),
-      ]);
-      const signature = signed?.signatures[walletMessageSigner.address];
-      if (!signature) {
-        throw new Error('Wallet returned no signature');
+      const signFeature = standardWallet.features['solana:signMessage'] as
+        | {
+            signMessage: (input: {
+              account: typeof standardAccount;
+              message: Uint8Array;
+            }) => Promise<readonly { signature: Uint8Array }[]>;
+          }
+        | undefined;
+      if (!signFeature) {
+        throw new Error(
+          `${standardWallet.name ?? 'This wallet'} does not support message signing (solana:signMessage). ` +
+            'Try Phantom, Solflare, or Backpack.'
+        );
       }
-      return new Uint8Array(signature);
+
+      try {
+        const results = await signFeature.signMessage({
+          account: standardAccount,
+          message,
+        });
+        const signature = results?.[0]?.signature;
+        if (!signature) {
+          throw new Error('Wallet returned no signature');
+        }
+        return new Uint8Array(signature);
+      } catch (error) {
+        // Surface the wallet's actual failure, walking the cause chain.
+        const parts: string[] = [];
+        let current: unknown = error;
+        while (current) {
+          const msg =
+            current instanceof Error
+              ? current.message
+              : typeof current === 'string'
+                ? current
+                : null;
+          if (msg && !parts.includes(msg)) parts.push(msg);
+          current = current instanceof Error ? current.cause : null;
+        }
+        throw new Error(
+          `Wallet message signing failed (${standardWallet.name ?? 'unknown wallet'}): ${
+            parts.join(' — ') || String(error)
+          }`
+        );
+      }
     },
-    [walletMessageSigner]
+    [standardWallet, standardAccount]
   );
 
-  // deriveCtKeys expects a kit MessagePartialSigner; adapt the ConnectorKit
-  // message signer (wallets sign one message at a time) to that interface.
+  // deriveCtKeys expects a kit MessagePartialSigner (wallets sign one message
+  // at a time, so messages are signed sequentially).
   const messageSigner = useMemo<MessagePartialSigner | null>(() => {
-    if (!walletMessageSigner) return null;
-    const signerAddress = walletMessageSigner.address;
+    if (!standardAccount) return null;
+    const signerAddress = address(standardAccount.address);
     return {
       address: signerAddress,
       signMessages: async (messages) => {
         const dictionaries: SignatureDictionary[] = [];
         for (const message of messages) {
-          const [signed] = await walletMessageSigner.modifyAndSignMessages([
-            createSignableMessage(new Uint8Array(message.content)),
-          ]);
-          dictionaries.push((signed?.signatures ?? Object.freeze({})) as SignatureDictionary);
+          const signature = await signMessage(new Uint8Array(message.content));
+          dictionaries.push(
+            Object.freeze({ [signerAddress]: signature as SignatureBytes })
+          );
         }
         return dictionaries;
       },
     };
-  }, [walletMessageSigner]);
+  }, [standardAccount, signMessage]);
 
   const transactionSigner = useMemo(
     () => (kitSigner as TransactionSigner | null) ?? null,
