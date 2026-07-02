@@ -1,6 +1,6 @@
 'use client';
 
-import { createContext, useCallback, useContext, useMemo, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useMemo, useState, type ReactNode } from 'react';
 import {
   AppProvider,
   getDefaultConfig,
@@ -38,7 +38,7 @@ interface WalletContextType {
   walletName: string | null;
   /** Icon URL / data URI of the connected wallet */
   walletIcon: string | null;
-  /** Connect to the first available wallet (used by inline connect buttons) */
+  /** Open the wallet picker so the user can choose which wallet to connect */
   connect: () => Promise<void>;
   disconnect: () => Promise<void>;
   /** Sign raw bytes with the connected wallet (auth login) */
@@ -127,15 +127,26 @@ function WalletContextBridge({ children }: { children: ReactNode }) {
     [kitSigner]
   );
 
-  // Convenience connect used by inline "Connect Wallet" buttons: connect to
-  // the first installed wallet.
+  // Never auto-pick a wallet: browsers like Brave register a built-in wallet
+  // even when the user has never set it up, so "first ready connector" would
+  // silently grab the wrong one. connect() always opens the picker instead.
+  const [isPickerOpen, setPickerOpen] = useState(false);
+
   const connect = useCallback(async () => {
-    const target = connectors.find((connector) => connector.ready) ?? connectors[0];
-    if (!target) {
-      throw new Error('No wallet found. Please install a Solana wallet.');
-    }
-    await connectById(target.id);
-  }, [connectors, connectById]);
+    setPickerOpen(true);
+  }, []);
+
+  const handlePickWallet = useCallback(
+    async (connectorId: string) => {
+      setPickerOpen(false);
+      try {
+        await connectById(connectorId as Parameters<typeof connectById>[0]);
+      } catch (error) {
+        console.error('Failed to connect wallet:', error);
+      }
+    },
+    [connectById]
+  );
 
   const value = useMemo<WalletContextType>(
     () => ({
@@ -164,7 +175,75 @@ function WalletContextBridge({ children }: { children: ReactNode }) {
     ]
   );
 
-  return <WalletContext.Provider value={value}>{children}</WalletContext.Provider>;
+  return (
+    <WalletContext.Provider value={value}>
+      {children}
+      {isPickerOpen && (
+        <WalletPickerModal
+          connectors={connectors}
+          onSelect={handlePickWallet}
+          onClose={() => setPickerOpen(false)}
+        />
+      )}
+    </WalletContext.Provider>
+  );
+}
+
+interface WalletPickerModalProps {
+  connectors: ReturnType<typeof useWalletConnectors>;
+  onSelect: (connectorId: string) => void;
+  onClose: () => void;
+}
+
+function WalletPickerModal({ connectors, onSelect, onClose }: WalletPickerModalProps) {
+  const installed = connectors.filter((connector) => connector.ready);
+
+  return (
+    <div className="fixed inset-0 z-50" onClick={onClose}>
+      <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" />
+      <div className="absolute inset-0 flex items-center justify-center p-4">
+        <div
+          className="w-full max-w-xs bg-zinc-900 border border-zinc-800 rounded-lg shadow-xl"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div className="flex items-center justify-between p-4 border-b border-zinc-800">
+            <span className="text-xs text-zinc-400 uppercase tracking-wider">Select wallet</span>
+            <button
+              onClick={onClose}
+              className="text-zinc-500 hover:text-zinc-300 transition-colors"
+              aria-label="Close"
+            >
+              ✕
+            </button>
+          </div>
+          <div className="p-2">
+            {installed.length === 0 ? (
+              <p className="px-3 py-4 text-xs text-zinc-500">
+                No Solana wallet found. Install Phantom, Solflare, or Backpack, then reload this
+                page.
+              </p>
+            ) : (
+              installed.map((connector) => (
+                <button
+                  key={connector.id}
+                  onClick={() => onSelect(connector.id)}
+                  className="w-full flex items-center gap-3 px-3 py-2.5 text-left text-sm text-zinc-200 hover:bg-zinc-800 rounded transition-colors"
+                >
+                  {connector.icon ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img src={connector.icon} alt="" className="w-5 h-5 rounded" />
+                  ) : (
+                    <div className="w-5 h-5 rounded-full bg-gradient-to-br from-emerald-400 to-teal-500" />
+                  )}
+                  {connector.name}
+                </button>
+              ))
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 interface WalletProviderProps {
