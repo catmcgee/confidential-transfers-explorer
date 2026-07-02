@@ -3,7 +3,10 @@ import type { Instruction, KeyPairSigner } from '@solana/kit';
 
 // Confidential transfer enabled mint address (configure this)
 const CT_MINT = process.env.CT_FAUCET_MINT || '9bLcAhVjiUZsTdpcg2HtrddiSzuK5uEezAWDi7u1aght';
-const RPC_URL = process.env.NEXT_PUBLIC_SOLANA_RPC_URL || 'https://api.devnet.solana.com';
+const RPC_URL =
+  process.env.SOLANA_RPC_URL ||
+  process.env.NEXT_PUBLIC_SOLANA_RPC_URL ||
+  'https://api.devnet.solana.com';
 const FAUCET_AMOUNT = 50; // Amount to send (in token units before decimals)
 const SOL_AMOUNT = 0.1; // Amount of SOL to send for transaction fees
 

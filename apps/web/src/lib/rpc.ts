@@ -8,7 +8,13 @@ import {
   type UserTokenAccountInfo,
 } from '@ct-explorer/shared';
 
-const RPC_URL = process.env['NEXT_PUBLIC_SOLANA_RPC_URL'] || 'https://api.devnet.solana.com';
+// Server-side RPC. Prefers the private SOLANA_RPC_URL (e.g. a keyed Helius
+// endpoint set only in the server environment — never exposed to the
+// browser), falling back to the public endpoint.
+const RPC_URL =
+  process.env['SOLANA_RPC_URL'] ||
+  process.env['NEXT_PUBLIC_SOLANA_RPC_URL'] ||
+  'https://api.devnet.solana.com';
 
 const cache = new Map<string, { data: unknown; expiry: number }>();
 
