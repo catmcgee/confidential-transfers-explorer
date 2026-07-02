@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { addressQuerySchema, pubkeySchema, apiResponse, apiError } from '@ct-explorer/shared';
-import type { CTActivityResponse, AddressActivityResponse } from '@ct-explorer/shared';
-import { getActivityByAddress } from '@/lib/db';
-import { fetchActivitiesForAddress } from '@/lib/rpc';
+import type { AddressActivityResponse } from '@ct-explorer/shared';
+import { fetchActivityFromIndexer } from '@/lib/indexer';
+import { fetchActivityPageFromRpc } from '@/lib/rpc';
 
 export async function GET(
   request: NextRequest,
@@ -36,49 +36,18 @@ export async function GET(
 
     const { limit, cursor, type } = parseResult.data;
 
-    // Get activities from database
-    const result = await getActivityByAddress(pubkey, limit, cursor, type);
-
-    if (result.activities.length > 0) {
-      // Transform to response format
-      const activities: CTActivityResponse[] = result.activities.map((a) => ({
-        id: a.id,
-        signature: a.signature,
-        slot: a.slot,
-        blockTime: a.blockTime,
-        timestamp: a.blockTime ? new Date(a.blockTime * 1000).toISOString() : null,
-        instructionType: a.instructionType,
-        mint: a.mint,
-        sourceOwner: a.sourceOwner,
-        destOwner: a.destOwner,
-        sourceTokenAccount: a.sourceTokenAccount,
-        destTokenAccount: a.destTokenAccount,
-        amount: a.publicAmount ? a.publicAmount : 'confidential',
-        ciphertextLo: a.ciphertextLo,
-        ciphertextHi: a.ciphertextHi,
-      }));
-
-      const response: AddressActivityResponse = {
-        address: pubkey,
-        activities,
-        cursor: result.nextCursor,
-        hasMore: result.nextCursor !== null,
-      };
-
-      return NextResponse.json(apiResponse(response));
+    let result;
+    try {
+      result = await fetchActivityFromIndexer(pubkey, limit, cursor ?? null, type);
+    } catch {
+      result = await fetchActivityPageFromRpc(pubkey, limit, cursor ?? null, type);
     }
-
-    // Fallback: fetch directly from RPC
-    const rpcActivities = await fetchActivitiesForAddress(pubkey, limit);
-    const filtered = type === 'all'
-      ? rpcActivities
-      : rpcActivities.filter((a) => a.instructionType === type);
 
     const response: AddressActivityResponse = {
       address: pubkey,
-      activities: filtered,
-      cursor: null,
-      hasMore: false,
+      activities: result.activities,
+      cursor: result.cursor,
+      hasMore: result.hasMore,
     };
 
     return NextResponse.json(apiResponse(response));

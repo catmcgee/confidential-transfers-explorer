@@ -1,4 +1,4 @@
-import { address } from '@solana/addresses';
+import { address } from '@solana/kit';
 import { TOKEN_2022_PROGRAM_ID } from '@ct-explorer/shared';
 import type { IndexerConfig } from './config.js';
 import { getRpcClient, type SolanaClient } from './rpc/client.js';

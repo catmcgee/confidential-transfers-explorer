@@ -5,14 +5,65 @@
  * Default: 1,000,000 tokens
  */
 
-import { Connection, Keypair, PublicKey, Transaction } from '@solana/web3.js';
-import { TOKEN_2022_PROGRAM_ID, createMintToInstruction, getAssociatedTokenAddress, ASSOCIATED_TOKEN_PROGRAM_ID } from '@solana/spl-token';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import {
+  address,
+  appendTransactionMessageInstructions,
+  assertIsTransactionWithBlockhashLifetime,
+  createKeyPairSignerFromBytes,
+  createSolanaRpc,
+  createSolanaRpcSubscriptions,
+  createTransactionMessage,
+  getSignatureFromTransaction,
+  pipe,
+  sendAndConfirmTransactionFactory,
+  setTransactionMessageFeePayerSigner,
+  setTransactionMessageLifetimeUsingBlockhash,
+  signTransactionMessageWithSigners,
+} from '@solana/kit';
+import {
+  TOKEN_2022_PROGRAM_ADDRESS,
+  findAssociatedTokenPda,
+  getMintToInstruction,
+} from '@solana-program/token-2022';
 import bs58 from 'bs58';
 
-const RPC_URL = process.env.NEXT_PUBLIC_SOLANA_RPC_URL || 'https://zk-edge.surfnet.dev:8899';
+// Load env vars from apps/web/.env (without overriding already-set ones)
+function loadEnvFile(): void {
+  try {
+    const envPath = fileURLToPath(new URL('../apps/web/.env', import.meta.url));
+    const contents = readFileSync(envPath, 'utf8');
+    for (const line of contents.split('\n')) {
+      const match = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)\s*$/);
+      if (!match) continue;
+      const key = match[1];
+      let value = match[2];
+      if (
+        (value.startsWith('"') && value.endsWith('"')) ||
+        (value.startsWith("'") && value.endsWith("'"))
+      ) {
+        value = value.slice(1, -1);
+      }
+      if (process.env[key] === undefined) {
+        process.env[key] = value;
+      }
+    }
+  } catch {
+    // No .env file found; rely on the environment
+  }
+}
+
+loadEnvFile();
+
+const RPC_URL = process.env.NEXT_PUBLIC_SOLANA_RPC_URL || 'https://api.devnet.solana.com';
 const MINT_ADDRESS = process.env.CT_FAUCET_MINT || 'GUg6pt12mec2bMDTY9gCH6dG9FnhHHnEzSKKKt3P8kRw';
 const MINT_SECRET_KEY = process.env.MINT_SECRET_KEY;
 const DECIMALS = 9;
+
+function toWebSocketUrl(url: string): string {
+  return url.replace(/^http/, 'ws');
+}
 
 async function main() {
   const amountArg = process.argv[2];
@@ -25,8 +76,8 @@ async function main() {
     console.error('MINT_SECRET_KEY not set in .env');
     process.exit(1);
   }
-  const mintKeypair = Keypair.fromSecretKey(bs58.decode(MINT_SECRET_KEY));
-  const mintPubkey = new PublicKey(MINT_ADDRESS);
+  const mintSigner = await createKeyPairSignerFromBytes(bs58.decode(MINT_SECRET_KEY));
+  const mintAddress = address(MINT_ADDRESS);
 
   // Load faucet keypair to pay for tx
   const faucetPrivateKey = process.env.FAUCET_PRIVATE_KEY;
@@ -34,43 +85,47 @@ async function main() {
     console.error('FAUCET_PRIVATE_KEY not set');
     process.exit(1);
   }
-  const faucetKeypair = Keypair.fromSecretKey(bs58.decode(faucetPrivateKey));
+  const faucetSigner = await createKeyPairSignerFromBytes(bs58.decode(faucetPrivateKey));
 
-  const connection = new Connection(RPC_URL, 'confirmed');
+  const rpc = createSolanaRpc(RPC_URL);
+  const rpcSubscriptions = createSolanaRpcSubscriptions(toWebSocketUrl(RPC_URL));
+  const sendAndConfirm = sendAndConfirmTransactionFactory({ rpc, rpcSubscriptions });
 
   // Get faucet's token account
-  const faucetAta = await getAssociatedTokenAddress(
-    mintPubkey,
-    faucetKeypair.publicKey,
-    false,
-    TOKEN_2022_PROGRAM_ID,
-    ASSOCIATED_TOKEN_PROGRAM_ID
-  );
+  const [faucetAta] = await findAssociatedTokenPda({
+    owner: faucetSigner.address,
+    tokenProgram: TOKEN_2022_PROGRAM_ADDRESS,
+    mint: mintAddress,
+  });
 
   const mintAmount = BigInt(amount) * BigInt(10 ** DECIMALS);
 
-  const tx = new Transaction();
-  tx.add(
-    createMintToInstruction(
-      mintPubkey,
-      faucetAta,
-      mintKeypair.publicKey, // mint authority
-      mintAmount,
-      [],
-      TOKEN_2022_PROGRAM_ID
-    )
+  const { value: latestBlockhash } = await rpc.getLatestBlockhash({ commitment: 'confirmed' }).send();
+
+  const transactionMessage = pipe(
+    createTransactionMessage({ version: 0 }),
+    // Faucet is the fee payer; mint signer (mint authority) signs via the instruction
+    (tx) => setTransactionMessageFeePayerSigner(faucetSigner, tx),
+    (tx) => setTransactionMessageLifetimeUsingBlockhash(latestBlockhash, tx),
+    (tx) =>
+      appendTransactionMessageInstructions(
+        [
+          getMintToInstruction({
+            mint: mintAddress,
+            token: faucetAta,
+            mintAuthority: mintSigner, // mint authority
+            amount: mintAmount,
+          }),
+        ],
+        tx
+      )
   );
 
-  const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash('confirmed');
-  tx.recentBlockhash = blockhash;
-  tx.lastValidBlockHeight = lastValidBlockHeight;
-  tx.feePayer = faucetKeypair.publicKey;
+  const signedTransaction = await signTransactionMessageWithSigners(transactionMessage);
+  assertIsTransactionWithBlockhashLifetime(signedTransaction);
+  await sendAndConfirm(signedTransaction, { commitment: 'confirmed', skipPreflight: true });
 
-  // Sign with both faucet (fee payer) and mint keypair (authority)
-  tx.sign(faucetKeypair, mintKeypair);
-
-  const sig = await connection.sendRawTransaction(tx.serialize(), { skipPreflight: true });
-  console.log(`Transaction: ${sig}`);
+  console.log(`Transaction: ${getSignatureFromTransaction(signedTransaction)}`);
   console.log('Done!');
 }
 

@@ -1,34 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { feedQuerySchema, apiResponse, apiError } from '@ct-explorer/shared';
-import type { CTActivityResponse, FeedResponse } from '@ct-explorer/shared';
-import { getFeed } from '@/lib/db';
-import { fetchActivitiesForAddress } from '@/lib/rpc';
-
-const TOKEN_2022_PROGRAM = 'TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb';
+import { feedQuerySchema, pubkeySchema, apiResponse, apiError } from '@ct-explorer/shared';
+import type { FeedResponse } from '@ct-explorer/shared';
+import { fetchFeedFromIndexer, fetchActivityFromIndexer } from '@/lib/indexer';
+import { fetchActivityPageFromRpc, fetchFeedPageFromRpc } from '@/lib/rpc';
 
 export async function GET(request: NextRequest) {
   try {
     const searchParams = request.nextUrl.searchParams;
     const address = searchParams.get('address');
-
-    // If address is provided, fetch from RPC directly
-    if (address) {
-      const limit = parseInt(searchParams.get('limit') ?? '50', 10);
-      const activities = await fetchActivitiesForAddress(address, limit);
-
-      // Filter by type if specified
-      const type = searchParams.get('type') ?? 'all';
-      const filtered = type === 'all'
-        ? activities
-        : activities.filter((a) => a.instructionType === type);
-
-      const response: FeedResponse = {
-        activities: filtered,
-        cursor: null,
-        hasMore: false,
-      };
-      return NextResponse.json(apiResponse(response));
-    }
 
     // Parse and validate query params
     const parseResult = feedQuerySchema.safeParse({
@@ -45,48 +24,40 @@ export async function GET(request: NextRequest) {
 
     const { limit, cursor, type } = parseResult.data;
 
-    // Get feed from database
-    const result = await getFeed(limit, cursor, type);
+    if (address) {
+      const addressResult = pubkeySchema.safeParse(address);
+      if (!addressResult.success) {
+        return NextResponse.json(apiError('Invalid address', 'INVALID_ADDRESS'), {
+          status: 400,
+        });
+      }
 
-    // If DB returned results, use them
-    if (result.activities.length > 0) {
-      const activities: CTActivityResponse[] = result.activities.map((a) => ({
-        id: a.id,
-        signature: a.signature,
-        slot: a.slot,
-        blockTime: a.blockTime,
-        timestamp: a.blockTime ? new Date(a.blockTime * 1000).toISOString() : null,
-        instructionType: a.instructionType,
-        mint: a.mint,
-        sourceOwner: a.sourceOwner,
-        destOwner: a.destOwner,
-        sourceTokenAccount: a.sourceTokenAccount,
-        destTokenAccount: a.destTokenAccount,
-        amount: a.publicAmount ? a.publicAmount : 'confidential',
-        ciphertextLo: a.ciphertextLo,
-        ciphertextHi: a.ciphertextHi,
-      }));
+      let result;
+      try {
+        result = await fetchActivityFromIndexer(address, limit, cursor ?? null, type);
+      } catch {
+        result = await fetchActivityPageFromRpc(address, limit, cursor ?? null, type);
+      }
 
       const response: FeedResponse = {
-        activities,
-        cursor: result.nextCursor,
-        hasMore: result.nextCursor !== null,
+        activities: result.activities,
+        cursor: result.cursor,
+        hasMore: result.hasMore,
       };
-
       return NextResponse.json(apiResponse(response));
     }
 
-    // DB is empty or unavailable — fall back to RPC
-    // Fetch recent activity from the Token-2022 program
-    const rpcActivities = await fetchActivitiesForAddress(TOKEN_2022_PROGRAM, limit);
-    const filtered = type === 'all'
-      ? rpcActivities
-      : rpcActivities.filter((a) => a.instructionType === type);
+    let result;
+    try {
+      result = await fetchFeedFromIndexer(limit, cursor ?? null, type);
+    } catch {
+      result = await fetchFeedPageFromRpc(limit, cursor ?? null, type);
+    }
 
     const response: FeedResponse = {
-      activities: filtered.slice(0, limit),
-      cursor: null,
-      hasMore: false,
+      activities: result.activities,
+      cursor: result.cursor,
+      hasMore: result.hasMore,
     };
 
     return NextResponse.json(apiResponse(response));

@@ -12,7 +12,7 @@ export interface IndexerConfig {
 }
 
 export function loadConfig(): IndexerConfig {
-  const rpcUrl = process.env['SOLANA_RPC_URL'] || 'https://zk-edge.surfnet.dev:8899';
+  const rpcUrl = process.env['SOLANA_RPC_URL'] || 'https://api.devnet.solana.com';
 
   // Infer WebSocket URL from HTTP URL
   let wsUrl = process.env['SOLANA_WS_URL'];

@@ -145,7 +145,7 @@ export default function TxPage({ params }: TxPageProps) {
 
         <div className="divide-y divide-zinc-800/30">
           {tx.activities.map((activity, index) => (
-            <ActivityDetail key={activity.id} activity={activity} index={index} />
+            <ActivityDetail key={`${activity.signature}:${activity.id}`} activity={activity} index={index} />
           ))}
         </div>
       </div>

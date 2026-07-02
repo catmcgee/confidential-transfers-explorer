@@ -1,12 +1,17 @@
 'use client';
 
+import dynamic from 'next/dynamic';
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { ActivityTable } from '@/components/ActivityTable';
 import { TypeFilter } from '@/components/TypeFilter';
 import { LoadingSpinner } from '@/components/LoadingSpinner';
-import { TransferModal } from '@/components/TransferModal';
 import { useWallet } from '@/components/WalletProvider';
 import { useFeed } from '@/hooks/useFeed';
+
+const TransferModal = dynamic(
+  () => import('@/components/TransferModal').then((mod) => mod.TransferModal),
+  { ssr: false }
+);
 
 const KONAMI_SEQUENCE = ['ArrowUp', 'ArrowUp', 'ArrowDown', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'ArrowLeft', 'ArrowRight', 'b', 'a'];
 const TITLE_TEXT = 'Confidential Transfers';
@@ -73,9 +78,9 @@ export default function HomePage() {
 
   const { activities, isLoading, error, hasMore, loadMore, refresh, addOptimisticActivity } = useFeed({
     type: actualTypeFilter,
-    limit: 50,
-    autoRefresh: true,
-    refreshInterval: 15000,
+    limit: 10,
+    autoRefresh: false,
+    refreshInterval: 60000,
     address: typeFilter === 'mine' ? publicKey ?? undefined : undefined,
   });
 
@@ -93,7 +98,7 @@ export default function HomePage() {
             {titleDisplay}
           </h1>
           <p className="text-xs text-zinc-500 mt-0.5 font-mono">
-            Token-2022 encrypted activity on zk-edge
+            Token-2022 encrypted activity on devnet
           </p>
         </div>
         <button
@@ -174,7 +179,7 @@ Fetching...
                 konamiActive={konamiActive}
               />
 
-              {hasMore && typeFilter !== 'mine' && (
+              {hasMore && (
                 <div className="p-4 border-t border-zinc-800/50 text-center">
                   <button
                     onClick={loadMore}
@@ -207,13 +212,15 @@ Fetching...
       </div>
 
       {/* Transfer Modal */}
-      <TransferModal
-        isOpen={isTransferModalOpen}
-        onClose={() => setIsTransferModalOpen(false)}
-        onTransferComplete={(transferData) => {
-          addOptimisticActivity(transferData);
-        }}
-      />
+      {isTransferModalOpen ? (
+        <TransferModal
+          isOpen={isTransferModalOpen}
+          onClose={() => setIsTransferModalOpen(false)}
+          onTransferComplete={(transferData) => {
+            addOptimisticActivity(transferData);
+          }}
+        />
+      ) : null}
     </div>
   );
 }

@@ -1,7 +1,5 @@
-import { createSolanaRpc } from '@solana/rpc';
-import { createSolanaRpcSubscriptions } from '@solana/rpc-subscriptions';
-import type { Rpc, SolanaRpcApi } from '@solana/rpc';
-import type { RpcSubscriptions, SolanaRpcSubscriptionsApi } from '@solana/rpc-subscriptions';
+import { createSolanaRpc, createSolanaRpcSubscriptions } from '@solana/kit';
+import type { Rpc, RpcSubscriptions, SolanaRpcApi, SolanaRpcSubscriptionsApi } from '@solana/kit';
 import type { IndexerConfig } from '../config.js';
 
 export type SolanaClient = Rpc<SolanaRpcApi>;

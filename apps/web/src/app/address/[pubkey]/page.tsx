@@ -22,7 +22,7 @@ export default function AddressPage({ params }: AddressPageProps) {
   const { activities, isLoading, error, hasMore, loadMore, refresh } = useAddressActivity({
     address: pubkey,
     type: typeFilter,
-    limit: 50,
+    limit: 20,
   });
 
   const isOwnAddress = isAuthenticated && authenticatedPublicKey === pubkey;
@@ -66,7 +66,7 @@ export default function AddressPage({ params }: AddressPageProps) {
 
           <div className="flex items-center gap-2">
             <Link
-              href={`https://explorer.solana.com/address/${pubkey}?cluster=custom&customUrl=https%3A%2F%2Fzk-edge.surfnet.dev`}
+              href={`https://explorer.solana.com/address/${pubkey}?cluster=devnet`}
               target="_blank"
               rel="noopener noreferrer"
               className="btn btn-outline text-sm"

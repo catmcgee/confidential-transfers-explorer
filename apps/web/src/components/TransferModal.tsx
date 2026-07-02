@@ -1,39 +1,51 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
-import { useWallet, waitForConfirmation } from './WalletProvider';
+import { createSolanaRpc, singleInstructionPlan } from '@solana/kit';
+import { useWallet } from './WalletProvider';
 import { shortenAddress } from '@/lib/format';
 import {
-  deriveElGamalKeypair,
-  generateElGamalKeypairFallback,
-  buildConfigureCtInstructions,
-  buildConfigureCtTransaction,
-  buildDepositInstruction,
-  buildDepositTransaction,
-  buildApplyPendingBalanceInstruction,
-  buildApplyPendingBalanceTransaction,
-  serializeTransactionToBase64,
-  parseElGamalPubkeyFromAccountInfo,
+  deriveCtKeys,
+  createConfigureAccountPlan,
+  createDepositInstruction,
+  createApplyPendingBalanceInstruction,
+  createTransferPlan,
+  executeInstructionPlan,
   decryptAeBalance,
   decryptElGamalBalance,
-  generateTransferProofs,
-  buildSplitProofTransferTransactions,
-  generateContextStateKeypair,
-  signWithKeypair,
-  type TransferProofs,
+  parseElGamalPubkeyFromAccountInfo,
+  type CtKeys,
 } from '@/lib/confidentialTransfer';
+import { createWalletMessageSigner, createWalletSendingSigner } from '@/lib/kitSigners';
 
 // Progress tracking type (local since it's UI-specific)
-interface SplitProofTransferProgress {
-  step: 'generating_proofs' | 'creating_equality' | 'creating_validity' | 'creating_range' | 'verifying_range' | 'executing_transfer' | 'complete' | 'error';
+interface TransferProgress {
+  step: 'generating_proofs' | 'executing_transfer' | 'complete' | 'error';
   currentTransaction: number;
   totalTransactions: number;
   signature?: string;
   error?: string;
 }
-import { VersionedTransaction, PublicKey } from '@solana/web3.js';
-import { ed25519 } from '@noble/curves/ed25519.js';
-import { randomFact } from 'random-facts';
+
+// A confidential transfer on devnet verifies its ZK proofs into context-state
+// accounts across several transactions before the transfer itself executes.
+// This is only an estimate used for the progress bar until the plan finishes.
+const ESTIMATED_TRANSFER_TRANSACTIONS = 5;
+
+const TRANSFER_FACTS = [
+  'Zero-knowledge proofs let you prove a fact without revealing the secret itself.',
+  'Confidential Transfer splits proof generation and transfer execution into separate steps.',
+  'ElGamal encryption supports homomorphic operations on encrypted balances.',
+  'Pending balances must be applied before they become spendable confidential balances.',
+  'Range proofs verify an amount stays in bounds without exposing the amount.',
+  'Wallet signatures can derive deterministic local keys without storing a seed server-side.',
+  'Grouped ciphertexts can include sender, recipient, and auditor handles together.',
+  'A decryptable available balance lets the owner recover their own confidential state.',
+];
+
+function getRandomTransferFact() {
+  return TRANSFER_FACTS[Math.floor(Math.random() * TRANSFER_FACTS.length)] ?? TRANSFER_FACTS[0]!;
+}
 
 interface TransferModalProps {
   isOpen: boolean;
@@ -70,8 +82,11 @@ interface TokenAccount {
   ctState?: CtAccountState;
 }
 
-const RPC_URL = process.env.NEXT_PUBLIC_SOLANA_RPC_URL || 'https://zk-edge.surfnet.dev:8899';
+const RPC_URL = process.env.NEXT_PUBLIC_SOLANA_RPC_URL || 'https://api.devnet.solana.com';
 const TOKEN_2022_PROGRAM_ID = 'TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb';
+
+// Single kit RPC client shared by all confidential-transfer operations.
+const rpc = createSolanaRpc(RPC_URL);
 
 function CopyButton({ text, label }: { text: string; label?: string }) {
   const [copied, setCopied] = useState(false);
@@ -107,7 +122,6 @@ export function TransferModal({ isOpen, onClose, onTransferComplete }: TransferM
   const [depositAmount, setDepositAmount] = useState('');
   const [transferAmount, setTransferAmount] = useState('');
   const [recipientAddress, setRecipientAddress] = useState('');
-  const [newBalanceAmount, setNewBalanceAmount] = useState(''); // For manual apply pending
   const [isProcessing, setIsProcessing] = useState(false);
   const [operationError, setOperationError] = useState<string | null>(null);
 
@@ -128,7 +142,7 @@ export function TransferModal({ isOpen, onClose, onTransferComplete }: TransferM
   const [faucetSuccess, setFaucetSuccess] = useState(false);
 
   // Transfer progress state
-  const [transferProgress, setTransferProgress] = useState<SplitProofTransferProgress | null>(null);
+  const [transferProgress, setTransferProgress] = useState<TransferProgress | null>(null);
 
   // Decryption loading states
   const [isDecryptingPending, setIsDecryptingPending] = useState(false);
@@ -143,36 +157,42 @@ export function TransferModal({ isOpen, onClose, onTransferComplete }: TransferM
 
   useEffect(() => {
     if (transferProgress && !['complete', 'error'].includes(transferProgress.step)) {
-      setFunFact(randomFact());
+      setFunFact(getRandomTransferFact());
       const interval = setInterval(() => {
-        setFunFact(randomFact());
+        setFunFact(getRandomTransferFact());
       }, 5000);
       return () => clearInterval(interval);
     }
   }, [transferProgress?.step]);
 
-  // Cached keys for ZK SDK - keys require wallet interaction so we cache them
-  const [cachedKeys, setCachedKeys] = useState<Record<string, {
-    keypair: Awaited<ReturnType<typeof deriveElGamalKeypair>>['keypair'];
-    aeKey: Awaited<ReturnType<typeof deriveElGamalKeypair>>['aeKey'];
-    publicKeyBytes: Uint8Array;
-  }>>({});
+  // Cached keys - derivation requires a wallet signature, so cache per mint.
+  // Keys are bound to (owner, mint), not the token-account address.
+  const [cachedKeys, setCachedKeys] = useState<Record<string, CtKeys>>({});
 
-  // Get cached keys for selected token
-  const tokenKeys = selectedToken ? cachedKeys[selectedToken.address] : null;
+  // Derive the confidential-transfer keys for a mint via wallet signMessage.
+  const getCtKeys = async (mintAddress: string): Promise<CtKeys> => {
+    const cached = cachedKeys[mintAddress];
+    if (cached) return cached;
+    if (!publicKey) throw new Error('Wallet not connected');
 
-  // Helper: derive ElGamal keys with fallback to random generation
-  const getElGamalKeys = async (tokenAddress: string) => {
+    const messageSigner = createWalletMessageSigner(publicKey, signMessage);
     try {
-      return await deriveElGamalKeypair(signMessage, tokenAddress);
+      const keys = await deriveCtKeys(messageSigner, publicKey, mintAddress);
+      setCachedKeys(prev => ({ ...prev, [mintAddress]: keys }));
+      return keys;
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err);
       if (errMsg.includes('UserKeyring') || errMsg.includes('signMessage') || errMsg.includes('locked')) {
-        setError('Make sure your wallet is connected and unlocked');
+        throw new Error('Message signing failed. Make sure your wallet is connected and unlocked.');
       }
-      console.warn('signMessage failed, using random keypair fallback:', err);
-      return await generateElGamalKeypairFallback(tokenAddress);
+      throw err;
     }
+  };
+
+  // Wallet-backed sending signer used as fee payer / authority for plans.
+  const getWalletSigner = () => {
+    if (!publicKey) throw new Error('Wallet not connected');
+    return createWalletSendingSigner(publicKey, signAndSendTransaction);
   };
 
   // Select a token - reset decrypted balances, keys will be derived on decrypt
@@ -189,82 +209,45 @@ export function TransferModal({ isOpen, onClose, onTransferComplete }: TransferM
     setDecryptedConfidentialBalance(null);
   };
 
-  // Decrypt pending balance - gets keys if needed, fetches fresh state from RPC, then decrypts via ZK SDK
+  // Fetch fresh confidential-transfer state for a token account
+  const fetchCtState = async (tokenAccountAddress: string): Promise<CtAccountState | undefined> => {
+    const accountResponse = await fetch(RPC_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'getAccountInfo',
+        params: [tokenAccountAddress, { encoding: 'jsonParsed' }]
+      })
+    });
+    const accountData = await accountResponse.json();
+    const extensions = accountData.result?.value?.data?.parsed?.info?.extensions || [];
+    const ctExt = extensions.find((e: { extension: string }) => e.extension === 'confidentialTransferAccount');
+    return ctExt?.state as CtAccountState | undefined;
+  };
+
+  // Decrypt pending balance - derives keys if needed, fetches fresh state, decrypts via ZK SDK
   const handleDecryptPending = async () => {
-    if (!selectedToken) {
-      console.log('Cannot decrypt pending - no token selected');
-      return;
-    }
+    if (!selectedToken) return;
 
     setIsDecryptingPending(true);
     try {
-      // Fetch fresh account state from RPC
-      console.log('Fetching fresh account state for pending balance...');
-      const accountResponse = await fetch(RPC_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          jsonrpc: '2.0',
-          id: 1,
-          method: 'getAccountInfo',
-          params: [selectedToken.address, { encoding: 'jsonParsed' }]
-        })
-      });
-      const accountData = await accountResponse.json();
-      const extensions = accountData.result?.value?.data?.parsed?.info?.extensions || [];
-      const ctExt = extensions.find((e: { extension: string }) => e.extension === 'confidentialTransferAccount');
-      const freshCtState = ctExt?.state as CtAccountState | undefined;
+      const freshCtState = await fetchCtState(selectedToken.address);
+      if (!freshCtState) return;
 
-      if (!freshCtState) {
-        console.log('No CT state found on account');
-        return;
-      }
-
-      // Get keys if not cached
-      let keys = tokenKeys;
-      if (!keys) {
-        console.log('Getting wallet keys for decryption...');
-        const derivedKeys = await getElGamalKeys(selectedToken.address);
-        keys = derivedKeys;
-        // Cache the keys
-        setCachedKeys(prev => ({
-          ...prev,
-          [selectedToken.address]: keys!
-        }));
-      }
-
-      // DEBUG: Compare derived ElGamal pubkey with on-chain
-      const derivedPubkeyBytes = keys.publicKeyBytes;
-      const onChainPubkeyBytes = Uint8Array.from(atob(freshCtState.elgamalPubkey), c => c.charCodeAt(0));
-      const derivedHex = Array.from(derivedPubkeyBytes).map(b => b.toString(16).padStart(2, '0')).join('');
-      const onChainHex = Array.from(onChainPubkeyBytes).map(b => b.toString(16).padStart(2, '0')).join('');
-      console.log('Derived ElGamal pubkey:', derivedHex);
-      console.log('On-chain ElGamal pubkey:', onChainHex);
-      console.log('ElGamal pubkeys match:', derivedHex === onChainHex);
+      const keys = await getCtKeys(selectedToken.mint);
 
       // Decrypt pending balance: lo (48-bit) and hi (16-bit) ElGamal ciphertexts
       const pendingLoBytes = Uint8Array.from(atob(freshCtState.pendingBalanceLo), c => c.charCodeAt(0));
       const pendingHiBytes = Uint8Array.from(atob(freshCtState.pendingBalanceHi), c => c.charCodeAt(0));
 
-      console.log('pendingLo bytes len:', pendingLoBytes.length, 'handle all zeros:', pendingLoBytes.slice(32).every(b => b === 0));
-      console.log('pendingHi bytes len:', pendingHiBytes.length, 'handle all zeros:', pendingHiBytes.slice(32).every(b => b === 0));
-
-      const secretKey = keys.keypair.secret();
-
-      const pendingLo = await decryptElGamalBalance(secretKey, pendingLoBytes);
-      const pendingHi = await decryptElGamalBalance(secretKey, pendingHiBytes);
-
-      console.log('Raw decrypted pendingLo:', pendingLo?.toString());
-      console.log('Raw decrypted pendingHi:', pendingHi?.toString());
+      const pendingLo = await decryptElGamalBalance(keys.elgamalSecretKey, pendingLoBytes);
+      const pendingHi = await decryptElGamalBalance(keys.elgamalSecretKey, pendingHiBytes);
 
       if (pendingLo !== null && pendingHi !== null) {
-        const pendingBalance = pendingLo + (pendingHi << 16n);
-        console.log('Decrypted pending balance:', pendingBalance.toString());
-        // Sanity check: ElGamal BSGS decrypt can return garbage for values > 2^32
-        // If the result looks unreasonable, set to null to trigger manual entry
-        setDecryptedPendingBalance(pendingBalance);
+        setDecryptedPendingBalance(pendingLo + (pendingHi << 16n));
       } else {
-        console.log('Could not decrypt pending balance (key mismatch or zero ciphertext)');
         setDecryptedPendingBalance(0n);
       }
     } catch (err) {
@@ -274,67 +257,24 @@ export function TransferModal({ isOpen, onClose, onTransferComplete }: TransferM
     }
   };
 
-  // Decrypt confidential balance - gets keys if needed, fetches fresh state from RPC, then decrypts via ZK SDK
+  // Decrypt confidential balance - derives keys if needed, fetches fresh state, decrypts via ZK SDK
   const handleDecryptConfidential = async () => {
-    if (!selectedToken) {
-      console.log('Cannot decrypt confidential - no token selected');
-      return;
-    }
+    if (!selectedToken) return;
 
     setIsDecryptingConfidential(true);
     try {
-      // Fetch fresh account state from RPC
-      console.log('Fetching fresh account state for confidential balance...');
-      const accountResponse = await fetch(RPC_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          jsonrpc: '2.0',
-          id: 1,
-          method: 'getAccountInfo',
-          params: [selectedToken.address, { encoding: 'jsonParsed' }]
-        })
-      });
-      const accountData = await accountResponse.json();
-      const extensions = accountData.result?.value?.data?.parsed?.info?.extensions || [];
-      const ctExt = extensions.find((e: { extension: string }) => e.extension === 'confidentialTransferAccount');
-      const freshCtState = ctExt?.state as CtAccountState | undefined;
+      const freshCtState = await fetchCtState(selectedToken.address);
+      if (!freshCtState) return;
 
-      if (!freshCtState) {
-        console.log('No CT state found on account');
-        return;
-      }
+      const keys = await getCtKeys(selectedToken.mint);
 
-      // Get keys if not cached
-      let keys = tokenKeys;
-      if (!keys) {
-        console.log('Getting wallet keys for decryption...');
-        const derivedKeys = await getElGamalKeys(selectedToken.address);
-        keys = derivedKeys;
-        // Cache the keys
-        setCachedKeys(prev => ({
-          ...prev,
-          [selectedToken.address]: keys!
-        }));
-      }
-
-      console.log('Decrypting confidential balance via ZK SDK...');
-      console.log('Fresh decryptableAvailableBalance:', freshCtState.decryptableAvailableBalance);
-
-      // Decode base64 to bytes
+      // Decode base64 to bytes and decrypt using the AES key
       const ciphertextBytes = Uint8Array.from(atob(freshCtState.decryptableAvailableBalance), c => c.charCodeAt(0));
+      const balance = await decryptAeBalance(keys.aesKey, ciphertextBytes);
 
-      // Decrypt using the AE key
-      const balance = await decryptAeBalance(keys.aeKey, ciphertextBytes);
-
-      console.log('Decrypted confidential balance:', balance?.toString());
       setDecryptedConfidentialBalance(balance);
     } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : String(err);
-      const errorStack = err instanceof Error ? err.stack : 'No stack trace';
-      console.error('Failed to decrypt confidential balance:', errorMessage);
-      console.error('Error stack:', errorStack);
-      console.error('Full error object:', err);
+      console.error('Failed to decrypt confidential balance:', err);
     } finally {
       setIsDecryptingConfidential(false);
     }
@@ -350,43 +290,21 @@ export function TransferModal({ isOpen, onClose, onTransferComplete }: TransferM
     try {
       const amount = BigInt(Math.floor(parseFloat(depositAmount) * Math.pow(10, selectedToken.decimals)));
 
-      // Get blockhash
-      const blockhashResponse = await fetch(RPC_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          jsonrpc: '2.0',
-          id: 1,
-          method: 'getLatestBlockhash',
-          params: [{ commitment: 'confirmed' }]
-        })
-      });
-      const blockhashData = await blockhashResponse.json();
-      const recentBlockhash = blockhashData.result.value.blockhash;
-      const lastValidBlockHeight = BigInt(blockhashData.result.value.lastValidBlockHeight);
-
-      // Build deposit instruction
-      const depositInstruction = buildDepositInstruction(
-        selectedToken.address,
-        selectedToken.mint,
-        publicKey,
+      const walletSigner = getWalletSigner();
+      const depositInstruction = createDepositInstruction({
+        tokenAccountAddress: selectedToken.address,
+        mintAddress: selectedToken.mint,
+        authority: walletSigner,
         amount,
-        selectedToken.decimals
-      );
+        decimals: selectedToken.decimals,
+      });
 
-      // Build deposit transaction
-      const compiledTx = buildDepositTransaction(
-        depositInstruction,
-        recentBlockhash,
-        lastValidBlockHeight,
-        publicKey
-      );
-
-      const base64Tx = serializeTransactionToBase64(compiledTx);
-      const transactionBytes = Uint8Array.from(atob(base64Tx), c => c.charCodeAt(0));
-
-      const signature = await signAndSendTransaction(transactionBytes);
-      console.log('Deposit transaction sent:', signature);
+      const { signatures } = await executeInstructionPlan({
+        plan: singleInstructionPlan(depositInstruction),
+        rpc,
+        feePayer: walletSigner,
+      });
+      const signature = signatures[signatures.length - 1] ?? '';
 
       // Add optimistic activity to the feed immediately
       if (onTransferComplete) {
@@ -434,116 +352,24 @@ export function TransferModal({ isOpen, onClose, onTransferComplete }: TransferM
     setOperationError(null);
 
     try {
-      // First, refresh account state to get latest pending balance info
-      const accountResponse = await fetch(RPC_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          jsonrpc: '2.0',
-          id: 1,
-          method: 'getAccountInfo',
-          params: [selectedToken.address, { encoding: 'jsonParsed' }]
-        })
-      });
-      const accountData = await accountResponse.json();
-      const extensions = accountData.result?.value?.data?.parsed?.info?.extensions || [];
-      const ctExt = extensions.find((e: { extension: string }) => e.extension === 'confidentialTransferAccount');
-      const ctState = ctExt?.state as CtAccountState | undefined;
+      const keys = await getCtKeys(selectedToken.mint);
+      const walletSigner = getWalletSigner();
 
-      if (!ctState) {
-        throw new Error('Could not fetch confidential account state');
-      }
-
-      // Get keys if not cached
-      let keys = tokenKeys;
-      if (!keys) {
-        console.log('Getting wallet keys for apply pending...');
-        const derivedKeys = await getElGamalKeys(selectedToken.address);
-        keys = derivedKeys;
-        setCachedKeys(prev => ({
-          ...prev,
-          [selectedToken.address]: keys!
-        }));
-      }
-
-      // Always AE-decrypt current available balance from fresh on-chain state (reliable, not BSGS)
-      const currentAeBytes = Uint8Array.from(atob(ctState.decryptableAvailableBalance), c => c.charCodeAt(0));
-      const currentAvailable = await decryptAeBalance(keys.aeKey, currentAeBytes) ?? 0n;
-
-      // Determine pending amount from ElGamal decrypt or by decrypting inline
-      let pendingAmount = 0n;
-      if (decryptedPendingBalance !== null && decryptedPendingBalance > 0n) {
-        pendingAmount = decryptedPendingBalance;
-      } else if (ctState.pendingBalanceCreditCounter > 0) {
-        // Try inline ElGamal decrypt of pending balance
-        try {
-          const pendingLoB64 = ctState.pendingBalanceLo;
-          const pendingHiB64 = ctState.pendingBalanceHi;
-          if (pendingLoB64 && pendingHiB64) {
-            const pendingLoCt = Uint8Array.from(atob(pendingLoB64), c => c.charCodeAt(0));
-            const pendingHiCt = Uint8Array.from(atob(pendingHiB64), c => c.charCodeAt(0));
-            const secretKey = keys.keypair.secret();
-            const lo = await decryptElGamalBalance(secretKey, pendingLoCt);
-            const hi = await decryptElGamalBalance(secretKey, pendingHiCt);
-            if (lo !== null) {
-              pendingAmount = lo + ((hi ?? 0n) << 16n);
-            }
-          }
-        } catch (decryptErr) {
-          console.warn('Inline pending decrypt failed:', decryptErr);
-        }
-        // If still zero but credits exist, the pending might be too large - use 0 and hope for the best
-        if (pendingAmount === 0n) {
-          console.warn('Could not determine pending balance, applying with pendingAmount=0');
-        }
-      }
-
-      // New available = current available + pending amount
-      const newAvailableBalance = currentAvailable + pendingAmount;
-
-      console.log('ApplyPendingBalance:', {
-        currentAvailable: currentAvailable.toString(),
-        pendingAmount: pendingAmount.toString(),
-        newAvailableBalance: newAvailableBalance.toString(),
+      // The helper fetches the token account, decrypts the pending balance
+      // locally, and re-encrypts the new decryptable available balance.
+      const applyInstruction = await createApplyPendingBalanceInstruction({
+        rpc,
+        tokenAccountAddress: selectedToken.address,
+        authority: walletSigner,
+        keys,
       });
 
-      // Get blockhash
-      const blockhashResponse = await fetch(RPC_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          jsonrpc: '2.0',
-          id: 1,
-          method: 'getLatestBlockhash',
-          params: [{ commitment: 'confirmed' }]
-        })
+      const { signatures } = await executeInstructionPlan({
+        plan: singleInstructionPlan(applyInstruction),
+        rpc,
+        feePayer: walletSigner,
       });
-      const blockhashData = await blockhashResponse.json();
-      const recentBlockhash = blockhashData.result.value.blockhash;
-      const lastValidBlockHeight = BigInt(blockhashData.result.value.lastValidBlockHeight);
-
-      // Build apply pending balance instruction using ZK SDK
-      const applyInstruction = await buildApplyPendingBalanceInstruction(
-        selectedToken.address,
-        publicKey,
-        keys.aeKey,
-        newAvailableBalance,
-        BigInt(ctState.actualPendingBalanceCreditCounter)
-      );
-
-      // Build transaction
-      const compiledTx = buildApplyPendingBalanceTransaction(
-        applyInstruction,
-        recentBlockhash,
-        lastValidBlockHeight,
-        publicKey
-      );
-
-      const base64Tx = serializeTransactionToBase64(compiledTx);
-      const transactionBytes = Uint8Array.from(atob(base64Tx), c => c.charCodeAt(0));
-
-      const signature = await signAndSendTransaction(transactionBytes);
-      console.log('Apply pending balance transaction sent:', signature);
+      const signature = signatures[signatures.length - 1] ?? '';
 
       // Add optimistic activity to the feed immediately
       if (onTransferComplete) {
@@ -636,7 +462,7 @@ export function TransferModal({ isOpen, onClose, onTransferComplete }: TransferM
             method: 'getTokenAccountsByOwner',
             params: [
               inputAddress,
-              { programId: 'TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb' },
+              { programId: TOKEN_2022_PROGRAM_ID },
               { encoding: 'jsonParsed' }
             ]
           })
@@ -692,7 +518,7 @@ export function TransferModal({ isOpen, onClose, onTransferComplete }: TransferM
     }
   };
 
-  // Handle confidential transfer using split proofs with partial signing
+  // Handle confidential transfer via the multi-transaction instruction plan
   const handleTransfer = async () => {
     if (!selectedToken || !publicKey || !transferAmount || !recipientInfo?.isCtConfigured || !recipientInfo.elgamalPubkey) {
       setOperationError('Missing required information for transfer');
@@ -731,254 +557,54 @@ export function TransferModal({ isOpen, onClose, onTransferComplete }: TransferM
     setTransferProgress({
       step: 'generating_proofs',
       currentTransaction: 0,
-      totalTransactions: 5,
+      totalTransactions: ESTIMATED_TRANSFER_TRANSACTIONS,
     });
 
     try {
-      // Get keys if not cached
-      let keys = tokenKeys;
-      if (!keys) {
-        console.log('Getting wallet keys for transfer...');
-        const derivedKeys = await getElGamalKeys(selectedToken.address);
-        keys = derivedKeys;
-        setCachedKeys(prev => ({
-          ...prev,
-          [selectedToken.address]: keys!
-        }));
-      }
+      const keys = await getCtKeys(selectedToken.mint);
+      const walletSigner = getWalletSigner();
 
-      console.log('Generating ZK proofs via ZK SDK...');
-      console.log('Sender:', publicKey);
-      console.log('Recipient:', recipientInfo.walletAddress);
-      console.log('Mint:', selectedToken.mint);
-      console.log('Amount:', amount.toString());
-      console.log('Current balance:', available.toString());
-
-      // Fetch the source account's available_balance ElGamal ciphertext from on-chain
-      // This is needed for homomorphic derivation of the new balance ciphertext
-      const sourceAccountResponse = await fetch(RPC_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          jsonrpc: '2.0', id: 1,
-          method: 'getAccountInfo',
-          params: [selectedToken.address, { encoding: 'jsonParsed', commitment: 'confirmed' }]
-        })
-      });
-      const sourceAccountData = await sourceAccountResponse.json();
-      const sourceExtensions = sourceAccountData.result?.value?.data?.parsed?.info?.extensions || [];
-      const sourceCTExt = sourceExtensions.find((e: { extension: string }) => e.extension === 'confidentialTransferAccount');
-      if (!sourceCTExt?.state?.availableBalance) {
-        throw new Error('Cannot read source account available balance ciphertext');
-      }
-      // availableBalance is base64-encoded 64-byte ElGamal ciphertext
-      console.log('Raw availableBalance from RPC:', sourceCTExt.state.availableBalance);
-      const sourceAvailableBalanceCt = Uint8Array.from(atob(sourceCTExt.state.availableBalance), c => c.charCodeAt(0));
-      console.log('Source available balance ciphertext length:', sourceAvailableBalanceCt.length, '(expected 64)');
-
-      // Generate proofs using ZK SDK
-      const proofData = await generateTransferProofs(
-        keys.keypair,
-        keys.aeKey,
-        recipientInfo.elgamalPubkey,
+      // Build the transfer plan: generates the equality, validity, and range
+      // proofs and verifies them via context-state accounts across multiple
+      // transactions before executing the transfer.
+      const plan = await createTransferPlan({
+        rpc,
+        payer: walletSigner,
+        sourceTokenAccountAddress: selectedToken.address,
+        destinationTokenAccountAddress: recipientInfo.tokenAccountAddress,
+        mintAddress: selectedToken.mint,
+        authority: walletSigner,
         amount,
-        available,
-        sourceAvailableBalanceCt,
-        undefined // no auditor for now
-      );
+        keys,
+      });
 
-      console.log('Proofs generated successfully via ZK SDK');
-      console.log('Equality proof size:', proofData.equalityProofData.length);
-      console.log('Validity proof size:', proofData.validityProofData.length);
-      console.log('Range proof size:', proofData.rangeProofData.length);
+      setTransferProgress({
+        step: 'executing_transfer',
+        currentTransaction: 0,
+        totalTransactions: ESTIMATED_TRANSFER_TRANSACTIONS,
+      });
 
-      // Generate context state keypairs for split proofs
-      const equalityContextKeypair = generateContextStateKeypair();
-      const validityContextKeypair = generateContextStateKeypair();
-      const rangeContextKeypair = generateContextStateKeypair();
+      const { signatures } = await executeInstructionPlan({
+        plan,
+        rpc,
+        feePayer: walletSigner,
+        onProgress: ({ signature, index }) => {
+          setTransferProgress({
+            step: 'executing_transfer',
+            currentTransaction: index + 1,
+            // Keep the bar from hitting 100% before the plan is done
+            totalTransactions: Math.max(ESTIMATED_TRANSFER_TRANSACTIONS, index + 2),
+            signature,
+          });
+        },
+      });
 
-      console.log('Context state accounts:');
-      console.log('  Equality:', equalityContextKeypair.address);
-      console.log('  Validity:', validityContextKeypair.address);
-      console.log('  Range:', rangeContextKeypair.address);
-
-      // Helper to get fresh blockhash (using 'confirmed' for fresher blockhashes)
-      const getBlockhash = async () => {
-        const response = await fetch(RPC_URL, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            jsonrpc: '2.0',
-            id: 1,
-            method: 'getLatestBlockhash',
-            params: [{ commitment: 'confirmed' }]
-          })
-        });
-        const data = await response.json();
-        return {
-          blockhash: data.result.value.blockhash,
-          lastValidBlockHeight: BigInt(data.result.value.lastValidBlockHeight)
-        };
-      };
-
-      // Get initial blockhash for building transactions
-      const { blockhash: recentBlockhash, lastValidBlockHeight } = await getBlockhash();
-
-      // Build all split proof transactions using ZK SDK-generated proofs
-      const { transactions } = await buildSplitProofTransferTransactions(
-        selectedToken.address,
-        recipientInfo.tokenAccountAddress,
-        selectedToken.mint,
-        publicKey,
-        proofData,
-        recentBlockhash,
-        lastValidBlockHeight,
-        RPC_URL,
-        equalityContextKeypair,
-        validityContextKeypair,
-        rangeContextKeypair
-      );
-
-      console.log(`Built ${transactions.length} transactions for split proof transfer`);
-
-      // Process each transaction (5 transactions to fit within wallet limits)
-      const stepNames: SplitProofTransferProgress['step'][] = [
-        'creating_equality',
-        'creating_validity',
-        'creating_range',
-        'verifying_range',
-        'executing_transfer',
-      ];
-
-      let lastSignature = '';
-
-      for (let i = 0; i < transactions.length; i++) {
-        const tx = transactions[i];
-        console.log(`Processing transaction ${i + 1}/${transactions.length}: ${tx.name}`);
-
-        setTransferProgress({
-          step: stepNames[i] || 'executing_transfer',
-          currentTransaction: i + 1,
-          totalTransactions: transactions.length,
-        });
-
-        // Retry logic with fresh blockhash for each transaction
-        const maxRetries = 3;
-        let lastError: Error | null = null;
-
-        for (let attempt = 1; attempt <= maxRetries; attempt++) {
-          try {
-            // Get fresh blockhash for this transaction
-            const { blockhash: freshBlockhash, lastValidBlockHeight: freshHeight } = await getBlockhash();
-
-            // Rebuild this specific transaction with fresh blockhash (using already-generated proofs)
-            const { transactions: rebuiltTxs } = await buildSplitProofTransferTransactions(
-              selectedToken.address,
-              recipientInfo.tokenAccountAddress,
-              selectedToken.mint,
-              publicKey,
-              proofData,
-              freshBlockhash,
-              freshHeight,
-              RPC_URL,
-              equalityContextKeypair,
-              validityContextKeypair,
-              rangeContextKeypair
-            );
-
-            const rebuiltTx = rebuiltTxs[i];
-
-            // Serialize the compiled transaction
-            const base64Tx = serializeTransactionToBase64(rebuiltTx.compiled);
-            const txBytes = Uint8Array.from(atob(base64Tx), c => c.charCodeAt(0));
-            console.log(`Tx ${i + 1} size: ${txBytes.length} bytes (attempt ${attempt})`);
-
-            // If this transaction has additional signers (context keypairs), sign with them first
-            if (rebuiltTx.additionalSigners && rebuiltTx.additionalSigners.length > 0) {
-              // Create a VersionedTransaction to add partial signatures
-              const versionedTx = VersionedTransaction.deserialize(txBytes);
-              const messageBytes = versionedTx.message.serialize();
-
-              console.log(`Tx ${i + 1}: numRequiredSignatures =`, versionedTx.message.header.numRequiredSignatures);
-              console.log(`Tx ${i + 1}: staticAccountKeys =`, versionedTx.message.staticAccountKeys.map(k => k.toBase58()));
-
-              for (const signerSecretKey of rebuiltTx.additionalSigners) {
-                // Sign with the context keypair
-                const signature = signWithKeypair(messageBytes, signerSecretKey);
-                const signerPubkey = ed25519.getPublicKey(signerSecretKey);
-
-                // Find the index of this signer in the transaction's account keys
-                // and add the signature at the correct position
-                const staticKeys = versionedTx.message.staticAccountKeys;
-                const signerPubkeyBase58 = new PublicKey(signerPubkey).toBase58();
-                const signerIndex = staticKeys.findIndex(
-                  key => key.toBase58() === signerPubkeyBase58
-                );
-
-                console.log(`Tx ${i + 1}: Looking for signer ${signerPubkeyBase58}, found at index ${signerIndex}`);
-
-                if (signerIndex >= 0 && signerIndex < versionedTx.message.header.numRequiredSignatures) {
-                  versionedTx.signatures[signerIndex] = signature;
-                  console.log(`Added signature for context account at index ${signerIndex}`);
-                } else if (signerIndex >= 0) {
-                  console.error(`Signer found at index ${signerIndex} but numRequiredSignatures is ${versionedTx.message.header.numRequiredSignatures}`);
-                } else {
-                  console.warn('Context signer not found in transaction accounts');
-                }
-              }
-
-              // Re-serialize with partial signatures for wallet signing
-              const partiallySignedTx = versionedTx.serialize();
-              lastSignature = await signAndSendTransaction(partiallySignedTx);
-            } else {
-              // No additional signers, just send to wallet
-              lastSignature = await signAndSendTransaction(txBytes);
-            }
-
-            console.log(`Transaction ${i + 1} sent: ${lastSignature}`);
-            break; // Success, exit retry loop
-
-          } catch (err) {
-            lastError = err instanceof Error ? err : new Error(String(err));
-            const errorMsg = lastError.message || '';
-
-            if (errorMsg.includes('Blockhash not found') && attempt < maxRetries) {
-              console.log(`Tx ${i + 1}: Blockhash issue, retrying (${attempt}/${maxRetries})...`);
-              await new Promise(resolve => setTimeout(resolve, 1000));
-              continue;
-            }
-
-            // Non-retryable error or max retries reached
-            throw lastError;
-          }
-        }
-
-        // Wait for transaction confirmation before proceeding to the next one
-        if (i < transactions.length - 1) {
-          console.log(`Transaction ${i + 1} sent (${lastSignature}), waiting for confirmation...`);
-
-          // Wait a moment then check transaction status
-          await new Promise(resolve => setTimeout(resolve, 1500));
-
-          const confirmResult = await waitForConfirmation(RPC_URL, lastSignature, 10000);
-
-          if (!confirmResult.confirmed) {
-            const errorMsg = confirmResult.error
-              ? JSON.stringify(confirmResult.error)
-              : 'Transaction failed or timed out';
-            throw new Error(`Transaction ${i + 1} failed: ${errorMsg}`);
-          }
-
-          console.log(`Transaction ${i + 1} confirmed successfully`);
-        }
-      }
-
-      console.log('Confidential transfer complete!');
+      const lastSignature = signatures[signatures.length - 1] ?? '';
 
       setTransferProgress({
         step: 'complete',
-        currentTransaction: transactions.length,
-        totalTransactions: transactions.length,
+        currentTransaction: signatures.length,
+        totalTransactions: signatures.length,
         signature: lastSignature,
       });
 
@@ -1009,7 +635,6 @@ export function TransferModal({ isOpen, onClose, onTransferComplete }: TransferM
     } catch (err) {
       console.error('Confidential transfer failed:', err);
 
-      // Provide more helpful error messages for common issues
       let errorMessage = 'Transfer failed';
       if (err instanceof Error) {
         errorMessage = err.message;
@@ -1019,21 +644,10 @@ export function TransferModal({ isOpen, onClose, onTransferComplete }: TransferM
         errorMessage = String(err);
       }
 
-      if (errorMessage.includes('too large') || errorMessage.includes('encoding overruns') || errorMessage.includes('1644')) {
-        errorMessage = 'Transaction too large: The RPC may not support 4KB transactions. ' +
-          'The zk-edge.surfnet.dev RPC supports larger transactions needed for ZK proofs.';
-      } else if (errorMessage.includes('invalid account data')) {
-        errorMessage = 'Context state account error: The ZK proof context state format may not be supported by this RPC. ' +
-          'This custom devnet may have different requirements for proof verification.';
-      } else if (errorMessage.includes('InvalidInstructionData')) {
-        errorMessage = 'Invalid instruction data: The transfer instruction format may not match what the program expects. ' +
-          'This could be due to proof verification issues or incorrect account configuration.';
-      }
-
       setTransferProgress({
         step: 'error',
         currentTransaction: 0,
-        totalTransactions: 5,
+        totalTransactions: ESTIMATED_TRANSFER_TRANSACTIONS,
         error: errorMessage,
       });
     } finally {
@@ -1076,27 +690,17 @@ export function TransferModal({ isOpen, onClose, onTransferComplete }: TransferM
   };
 
   const handleConfigureCt = async (token: TokenAccount) => {
-    console.log('handleConfigureCt called, publicKey:', publicKey, 'token:', token.address);
-    if (!publicKey) {
-      console.log('handleConfigureCt: publicKey is falsy, returning early');
-      return;
-    }
+    if (!publicKey) return;
 
     // Guard against multiple concurrent calls (React StrictMode / event bubbling)
-    if (configuringRef.current) {
-      console.log('handleConfigureCt: already in progress, skipping');
-      return;
-    }
+    if (configuringRef.current) return;
     configuringRef.current = true;
 
     setConfiguringAccount(token.address);
     setConfigureError(null);
 
     try {
-      // Step 0: Check mint and token account extensions
-      console.log('Checking mint and token account extensions...');
-
-      // Check mint
+      // Check that the mint supports confidential transfers
       const mintResponse = await fetch(RPC_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1108,112 +712,35 @@ export function TransferModal({ isOpen, onClose, onTransferComplete }: TransferM
         })
       });
       const mintData = await mintResponse.json();
-      console.log('Mint extensions:', JSON.stringify(mintData.result?.value?.data?.parsed?.info?.extensions || [], null, 2));
-
       const mintExtensions = mintData.result?.value?.data?.parsed?.info?.extensions || [];
       const hasCtMint = mintExtensions.some((ext: { extension: string }) =>
         ext.extension === 'confidentialTransferMint'
       );
-      console.log('Mint has CT extension:', hasCtMint);
 
       if (!hasCtMint) {
         throw new Error('Mint does not have ConfidentialTransferMint extension. Confidential transfers cannot be configured.');
       }
 
-      // Check token account
-      const accountResponse = await fetch(RPC_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          jsonrpc: '2.0',
-          id: 1,
-          method: 'getAccountInfo',
-          params: [token.address, { encoding: 'jsonParsed' }]
-        })
+      // Derive keys for (owner, mint) via wallet signMessage
+      const keys = await getCtKeys(token.mint);
+      const walletSigner = getWalletSigner();
+
+      // Build and execute the configure-account plan: reallocates the account
+      // for the extension, verifies the pubkey-validity proof, and configures it.
+      const plan = await createConfigureAccountPlan({
+        rpc,
+        payer: walletSigner,
+        owner: walletSigner,
+        mintAddress: token.mint,
+        tokenAccountAddress: token.address,
+        keys,
       });
-      const accountData = await accountResponse.json();
-      const accountExtensions = accountData.result?.value?.data?.parsed?.info?.extensions || [];
-      console.log('Token account extensions:', JSON.stringify(accountExtensions, null, 2));
-      console.log('Token account data size:', accountData.result?.value?.data?.parsed?.info?.space || accountData.result?.value?.space);
 
-      // Check if CT extension already exists on account
-      const hasCtAccount = accountExtensions.some((ext: { extension: string }) =>
-        ext.extension === 'confidentialTransferAccount'
-      );
-      console.log('Token account already has CT extension:', hasCtAccount);
-
-      // Step 1: Get wallet keys for derivation via ZK SDK
-      console.log('Getting ElGamal keypair via ZK SDK...');
-      const { keypair, publicKeyBytes, aeKey } = await getElGamalKeys(token.address);
-      console.log('ElGamal pubkey derived (full 32 bytes):', Array.from(publicKeyBytes).map(b => b.toString(16).padStart(2, '0')).join(''));
-      console.log('ElGamal pubkey length:', publicKeyBytes.length);
-
-      // Cache the keys for later use
-      setCachedKeys(prev => ({
-        ...prev,
-        [token.address]: { keypair, aeKey, publicKeyBytes }
-      }));
-
-      // Step 2: Build the instructions via ZK SDK
-      console.log('Building instructions via ZK SDK...');
-      const { reallocateInstruction, proofInstruction, configureInstruction } = await buildConfigureCtInstructions(
-        token.address,
-        token.mint,
-        publicKey,
-        keypair,
-        aeKey
-      );
-
-      // Step 3: Get recent blockhash
-      console.log('Getting blockhash...');
-      const blockhashResponse = await fetch(RPC_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          jsonrpc: '2.0',
-          id: 1,
-          method: 'getLatestBlockhash',
-          params: [{ commitment: 'confirmed' }]
-        })
+      await executeInstructionPlan({
+        plan,
+        rpc,
+        feePayer: walletSigner,
       });
-      const blockhashData = await blockhashResponse.json();
-      if (blockhashData.error) {
-        throw new Error(blockhashData.error.message);
-      }
-      const recentBlockhash = blockhashData.result.value.blockhash;
-      const lastValidBlockHeight = BigInt(blockhashData.result.value.lastValidBlockHeight);
-      console.log('Blockhash:', recentBlockhash);
-      console.log('Last valid block height:', lastValidBlockHeight.toString());
-
-      // Step 4: Build transaction using Solana Kit
-      console.log('Building transaction with Solana Kit...');
-      console.log('Proof instruction data length:', proofInstruction.data?.length ?? 0);
-      console.log('Token account:', token.address);
-      console.log('Mint:', token.mint);
-      console.log('Owner:', publicKey);
-
-      const compiledTransaction = buildConfigureCtTransaction(
-        reallocateInstruction,
-        configureInstruction,
-        proofInstruction,
-        recentBlockhash,
-        lastValidBlockHeight,
-        publicKey
-      );
-      console.log('Compiled transaction:', compiledTransaction);
-
-      // Step 5: Serialize to base64 for wallet
-      const base64Tx = serializeTransactionToBase64(compiledTransaction);
-      console.log('Base64 transaction length:', base64Tx.length);
-
-      // Step 6: Send to wallet for signing and sending
-      console.log('Sending to wallet...');
-
-      // Convert base64 to Uint8Array for wallet
-      const transactionBytes = Uint8Array.from(atob(base64Tx), c => c.charCodeAt(0));
-      const signature = await signAndSendTransaction(transactionBytes);
-
-      console.log('Transaction sent:', signature);
 
       // Refresh token accounts (don't let refresh failure mask a successful configure)
       try {
@@ -1225,11 +752,6 @@ export function TransferModal({ isOpen, onClose, onTransferComplete }: TransferM
       setConfigureError(null);
     } catch (err) {
       console.error('Failed to configure confidential transfers:', err);
-      console.error('Error type:', typeof err, 'constructor:', err?.constructor?.name);
-      if (err && typeof err === 'object') {
-        console.error('Error keys:', Object.keys(err));
-        try { console.error('Error JSON:', JSON.stringify(err, null, 2)); } catch {}
-      }
       let errorMessage: string;
       if (err instanceof Error) {
         errorMessage = err.message;
@@ -1273,7 +795,7 @@ export function TransferModal({ isOpen, onClose, onTransferComplete }: TransferM
             method: 'getTokenAccountsByOwner',
             params: [
               String(publicKey),
-              { programId: 'TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb' },
+              { programId: TOKEN_2022_PROGRAM_ID },
               { encoding: 'jsonParsed' }
             ]
           })
@@ -1615,11 +1137,7 @@ export function TransferModal({ isOpen, onClose, onTransferComplete }: TransferM
                                     <div className="space-y-3">
                                       <div className="text-[10px] text-emerald-400 font-medium">
                                         {transferProgress.step === 'generating_proofs' && 'Generating ZK proofs...'}
-                                        {transferProgress.step === 'creating_equality' && 'Creating & verifying equality proof...'}
-                                        {transferProgress.step === 'creating_validity' && 'Creating & verifying validity proof...'}
-                                        {transferProgress.step === 'creating_range' && 'Creating range context...'}
-                                        {transferProgress.step === 'verifying_range' && 'Verifying range proof...'}
-                                        {transferProgress.step === 'executing_transfer' && 'Executing transfer & closing contexts...'}
+                                        {transferProgress.step === 'executing_transfer' && 'Sending transfer transactions...'}
                                         {transferProgress.step === 'complete' && 'Transfer complete!'}
                                         {transferProgress.step === 'error' && 'Transfer failed'}
                                       </div>
@@ -1631,12 +1149,12 @@ export function TransferModal({ isOpen, onClose, onTransferComplete }: TransferM
                                             transferProgress.step === 'error' ? 'bg-red-500' :
                                             transferProgress.step === 'complete' ? 'bg-emerald-500' : 'bg-emerald-400'
                                           }`}
-                                          style={{ width: `${(transferProgress.currentTransaction / transferProgress.totalTransactions) * 100}%` }}
+                                          style={{ width: `${Math.min(100, (transferProgress.currentTransaction / transferProgress.totalTransactions) * 100)}%` }}
                                         />
                                       </div>
 
                                       <div className="text-[10px] text-zinc-500">
-                                        Step {transferProgress.currentTransaction} of {transferProgress.totalTransactions}
+                                        {transferProgress.currentTransaction} of ~{transferProgress.totalTransactions} transactions confirmed
                                       </div>
 
                                       {transferProgress.step !== 'complete' && transferProgress.step !== 'error' && funFact && (
@@ -1769,8 +1287,9 @@ export function TransferModal({ isOpen, onClose, onTransferComplete }: TransferM
                                           </button>
 
                                           <div className="mt-2 p-2 bg-emerald-500/10 border border-emerald-500/20 rounded text-[10px] text-emerald-400/80">
-                                            <strong>Note:</strong> Confidential transfers use 5 transactions with ZK proofs
-                                            to fit within wallet transaction size limits.
+                                            <strong>Note:</strong> Confidential transfers on devnet run as multiple
+                                            transactions — ZK proofs are verified into context-state accounts before
+                                            the transfer executes.
                                           </div>
                                         </>
                                       )}

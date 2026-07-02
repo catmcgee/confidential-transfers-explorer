@@ -13,13 +13,17 @@ Use this guidance when the user asks about:
 
 ## Current Network Availability
 
-**Important:** Confidential transfers are currently only available on a custom cluster.
+Confidential transfers work on standard clusters, including devnet.
 
-- RPC endpoint: `https://zk-edge.surfnet.dev:8899`
-- WebSocket: `wss://zk-edge.surfnet.dev:8900`
-- Mainnet availability expected in a few months
+- RPC endpoint: `https://api.devnet.solana.com`
+- WebSocket: `wss://api.devnet.solana.com`
 
-When building for confidential transfers, always use the ZK-Edge RPC for testing. Abstract the RPC endpoint into environment configuration for future mainnet migration. Ensure the user is aware of this.
+On standard clusters the 1232-byte transaction limit means ZK proofs cannot
+be inlined in a single transaction — transfers and withdrawals are split
+across multiple transactions using context-state accounts. The
+instruction-plan helpers in `@solana-program/token-2022/confidential`
+handle this automatically. Abstract the RPC endpoint into environment
+configuration.
 
 ## Key Concepts
 
@@ -142,17 +146,34 @@ tokio = { version = "1", features = ["full"] }
 ```json
 {
   "dependencies": {
-    "@solana/zk-sdk": "^0.3.1",
-    "@solana-program/token-2022": "^0.9.0",
-    "@solana/kit": "^5.5.1",
-    "@solana/spl-token": "^0.4.14",
-    "@solana/web3.js": "^1.98.4",
+    "@solana/zk-sdk": "^0.4.2",
+    "@solana-program/token-2022": "^0.12.0",
+    "@solana/kit": "^6.10.0",
     "@noble/curves": "^2.0.1",
     "@noble/hashes": "^2.0.1",
     "bs58": "^6.0.0"
   }
 }
 ```
+
+Notes:
+- `@solana/kit` is pinned to 6.x because `@solana-program/token-2022` 0.12
+  peer-depends on kit `^6.4.0` (kit 7 fails peer resolution).
+- `@solana/web3.js` v1 and `@solana/spl-token` are no longer needed — the
+  kit-native token-2022 client covers everything.
+- `@solana-program/token-2022@0.12+` exposes a `/confidential` subpath with
+  high-level helpers: `getCreateConfidentialTransferAccountInstructionPlan`,
+  `getConfidentialTransferInstructionPlan`,
+  `getConfidentialWithdrawInstructionPlan`,
+  `getApplyConfidentialPendingBalanceInstructionFromToken`, and
+  signature-based key derivation (`deriveElGamalKeypairForOwnerMint`,
+  `deriveAeKeyForOwnerMint`). Prefer these over hand-rolled proof plumbing.
+- `@solana/zk-sdk@0.4.x` added `ElGamalKeypair.fromSignature()` /
+  `AeKey.fromSignature()` and `signerMessage()` statics for CLI-compatible
+  key derivation from wallet signatures.
+- Runtime caveat: the zk-sdk WASM is ESM — Node needs
+  `--experimental-wasm-modules`; bun cannot load it (as of bun 1.2). Use
+  webpack/Next for browser bundles.
 
 **WebAssembly requirement**: The `@solana/zk-sdk` package requires WebAssembly. For Next.js, enable it in `next.config.ts`:
 
@@ -707,9 +728,11 @@ pub fn get_confidential_balances(
 **Bug**: `ed25519.utils.randomPrivateKey()` was renamed to `ed25519.utils.randomSecretKey()` in v2.x.
 **Impact**: Runtime crash with no clear error message.
 
-### 5. `@solana-program/token-2022` SDK bugs in transfer instruction
-**Bug**: The TypeScript SDK's transfer instruction builder (a) includes Token-2022 program ID as an extra account and (b) omits auditor ciphertext fields from instruction data (produces 41 bytes instead of 169).
-**Fix**: Build the transfer instruction data manually (see layout above).
+### 5. `@solana-program/token-2022` SDK bugs in transfer instruction (FIXED in 0.12)
+**Bug (0.9.x)**: The TypeScript SDK's transfer instruction builder (a) included Token-2022 program ID as an extra account and (b) omitted auditor ciphertext fields from instruction data (produced 41 bytes instead of 169).
+**Fix**: Upgrade to `@solana-program/token-2022@0.12+` and use
+`getConfidentialTransferInstructionPlan` from the `/confidential` subpath —
+no manual instruction building needed.
 
 ### 6. Context state account ownership
 **Bug**: Context state accounts for ZK proofs must be owned by the ZK ElGamal Proof Program.
@@ -746,8 +769,7 @@ pub fn get_confidential_balances(
 
 ## Limitations
 
-- Currently only works on ZK-Edge testnet (`https://zk-edge.surfnet.dev:8899`)
-- Transfer operations require 5-7 transactions due to ZK proof sizes (will decrease when larger transactions are supported on mainnet)
+- Works on standard clusters (devnet/mainnet-beta); transfer operations require 5-7 transactions due to ZK proof sizes vs the 1232-byte transaction limit
 - Proof generation is computationally intensive (client-side WASM for TypeScript, native for Rust)
 - ElGamal BSGS decryption limited to values < 2^32 (mitigated by balance splitting and AE encryption)
 - Sender must be a `Keypair` (not generic `Signer`) for the Rust token client transfer API

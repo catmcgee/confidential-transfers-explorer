@@ -13,24 +13,20 @@ const nextConfig: NextConfig = {
     config.experiments = {
       ...config.experiments,
       asyncWebAssembly: true,
+      layers: true,
     };
 
-    // Set target to support async/await for WASM
+    // Fix "Cannot read properties of undefined (reading 'call')" for WASM chunks
     if (!isServer) {
       config.output = {
         ...config.output,
+        webassemblyModuleFilename: 'static/wasm/[modulehash].wasm',
         environment: {
           ...config.output?.environment,
           asyncFunction: true,
         },
       };
     }
-
-    // Ensure WASM files are handled correctly
-    config.module.rules.push({
-      test: /\.wasm$/,
-      type: 'webassembly/async',
-    });
 
     return config;
   },

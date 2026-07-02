@@ -15,15 +15,7 @@
   },
   "dependencies": {
     "@ct-explorer/shared": "*",
-    "@solana/addresses": "^2.0.0",
-    "@solana/codecs": "^2.0.0",
-    "@solana/errors": "^2.0.0",
-    "@solana/keys": "^2.0.0",
-    "@solana/rpc": "^2.0.0",
-    "@solana/rpc-subscriptions": "^2.0.0",
-    "@solana/rpc-types": "^2.0.0",
-    "@solana/transaction-messages": "^2.0.0",
-    "@solana/transactions": "^2.0.0",
+    "@solana/kit": "^6.10.0",
     "dotenv": "^16.4.7",
     "zod": "^3.24.1"
   },

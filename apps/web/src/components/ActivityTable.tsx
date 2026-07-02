@@ -116,7 +116,7 @@ export function ActivityTable({
 
             return (
               <tr
-                key={activity.id}
+                key={`${activity.signature}:${activity.id}`}
                 className={`${activity.isOptimistic ? 'opacity-60 animate-pulse' : 'cursor-pointer hover:bg-zinc-800/50'}`}
                 onClick={() => !activity.isOptimistic && router.push(`/tx/${activity.signature}`)}
               >

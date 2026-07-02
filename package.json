@@ -24,7 +24,8 @@
     "typescript": "^5.7.2"
   },
   "dependencies": {
-    "@solana/spl-token": "^0.4.14",
-    "zk-elgamal-proof": "https://github.com/solana-program/zk-elgamal-proof.git#main"
+    "@solana-program/token-2022": "^0.12.0",
+    "@solana/kit": "^6.10.0",
+    "@solana/zk-sdk": "^0.4.2"
   }
 }

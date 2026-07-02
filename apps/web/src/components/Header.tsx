@@ -5,7 +5,7 @@ import { SearchBar } from './SearchBar';
 import { WalletButton } from './WalletButton';
 
 export function Header() {
-  const networkName = process.env['NEXT_PUBLIC_NETWORK_NAME'] || 'zk-edge.surfnet.dev';
+  const networkName = process.env['NEXT_PUBLIC_NETWORK_NAME'] || 'devnet';
 
   return (
     <header className="border-b border-zinc-800/50 bg-zinc-950/90 backdrop-blur-sm sticky top-0 z-50">

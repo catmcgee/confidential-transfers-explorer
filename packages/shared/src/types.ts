@@ -62,14 +62,14 @@ export interface CTActivityResponse {
 
 export interface FeedResponse {
   activities: CTActivityResponse[];
-  cursor: number | null;
+  cursor: string | null;
   hasMore: boolean;
 }
 
 export interface AddressActivityResponse {
   address: string;
   activities: CTActivityResponse[];
-  cursor: number | null;
+  cursor: string | null;
   hasMore: boolean;
 }
 
@@ -126,7 +126,7 @@ export interface LoginResponse {
 export interface UserActivityResponse {
   publicKey: string;
   activities: CTActivityResponse[];
-  cursor: number | null;
+  cursor: string | null;
   hasMore: boolean;
 }
 

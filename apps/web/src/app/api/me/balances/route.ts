@@ -1,8 +1,8 @@
 import { NextResponse } from 'next/server';
 import { apiResponse, apiError } from '@ct-explorer/shared';
-import type { UserBalancesResponse, UserTokenAccountInfo } from '@ct-explorer/shared';
+import type { UserBalancesResponse } from '@ct-explorer/shared';
 import { getSession } from '@/lib/auth';
-import { getTokenAccountsByOwner, getMint } from '@/lib/db';
+import { fetchUserTokenAccountsFromRpc } from '@/lib/rpc';
 
 export async function GET() {
   try {
@@ -14,31 +14,11 @@ export async function GET() {
       });
     }
 
-    // Get token accounts owned by the user
-    const tokenAccounts = await getTokenAccountsByOwner(session.publicKey);
-
-    // Build response with mint info
-    const accountInfo: UserTokenAccountInfo[] = await Promise.all(tokenAccounts.map(async (account) => {
-      const mint = await getMint(account.mint);
-
-      return {
-        address: account.address,
-        mint: account.mint,
-        mintDecimals: mint?.decimals ?? 9,
-        mintName: mint?.name ?? null,
-        mintSymbol: mint?.symbol ?? null,
-        // Encrypted balance fields - actual values would need to be fetched from chain
-        // These are placeholders; client-side decryption happens with user's keys
-        pendingBalanceLo: 'encrypted',
-        pendingBalanceHi: 'encrypted',
-        availableBalance: 'encrypted',
-        publicBalance: null, // Would need RPC call to get actual value
-      };
-    }));
+    const tokenAccounts = await fetchUserTokenAccountsFromRpc(session.publicKey);
 
     const response: UserBalancesResponse = {
       publicKey: session.publicKey,
-      tokenAccounts: accountInfo,
+      tokenAccounts,
     };
 
     return NextResponse.json(apiResponse(response));
