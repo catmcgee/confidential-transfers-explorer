@@ -40,7 +40,11 @@ export function useFeed(options: UseFeedOptions = {}): UseFeedResult {
   const [hasMore, setHasMore] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const cacheKey = `feed:${address ?? 'global'}:${type}:${limit}`;
+  // The API is always queried unfiltered ('all') and the type filter is
+  // applied client-side. Server-side type filtering re-scans the chain per
+  // filter with the same depth budget, so filtered tabs would surface fewer
+  // items than are already visible in the 'All' tab — confusing and slower.
+  const cacheKey = `feed:${address ?? 'global'}:${limit}`;
 
   const mergeActivities = useCallback((current: CTActivityResponse[], incoming: CTActivityResponse[]) => {
     const seenSignatures = new Set<string>();
@@ -60,7 +64,7 @@ export function useFeed(options: UseFeedOptions = {}): UseFeedResult {
       try {
         const params = new URLSearchParams();
         params.set('limit', limit.toString());
-        params.set('type', type);
+        params.set('type', 'all');
         if (currentCursor) {
           params.set('cursor', currentCursor);
         }
@@ -80,7 +84,7 @@ export function useFeed(options: UseFeedOptions = {}): UseFeedResult {
         throw err;
       }
     },
-    [limit, type, address]
+    [limit, address]
   );
 
   // Initial fetch
@@ -221,8 +225,13 @@ export function useFeed(options: UseFeedOptions = {}): UseFeedResult {
     [mergeActivities]
   );
 
+  const filteredActivities =
+    type === 'all'
+      ? activities
+      : activities.filter((activity) => activity.instructionType === type);
+
   return {
-    activities,
+    activities: filteredActivities,
     isLoading,
     error,
     hasMore,
