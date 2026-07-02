@@ -15,12 +15,14 @@ import {
   createTransactionPlanner,
   getBase58Decoder,
   getBase64EncodedWireTransaction,
+  isSolanaError,
   isTransactionSendingSigner,
   pipe,
   setTransactionMessageFeePayerSigner,
   setTransactionMessageLifetimeUsingBlockhash,
   signAndSendTransactionMessageWithSigners,
   signTransactionMessageWithSigners,
+  SOLANA_ERROR__INSTRUCTION_PLANS__FAILED_TO_EXECUTE_TRANSACTION_PLAN,
   type Address,
   type Instruction,
   type InstructionPlan,
@@ -368,6 +370,55 @@ export interface ExecutePlanResult {
 }
 
 /**
+ * Collects human-readable failure messages (including program logs) from an
+ * error and everything reachable through it — cause chains, and the
+ * `transactionPlanResult` tree that kit's plan executor attaches to its
+ * generic "plan failed to execute" error.
+ */
+function collectFailureMessages(root: unknown): string[] {
+  const messages: string[] = [];
+  const seen = new Set<unknown>();
+
+  const visit = (node: unknown) => {
+    if (!node || typeof node !== 'object' || seen.has(node)) return;
+    seen.add(node);
+
+    if (node instanceof Error) {
+      if (node.message && !messages.includes(node.message)) {
+        messages.push(node.message);
+      }
+      const context = (node as { context?: unknown }).context;
+      if (context && typeof context === 'object') {
+        const logs = (context as { logs?: unknown }).logs;
+        if (Array.isArray(logs)) {
+          const interesting = logs
+            .filter((line): line is string => typeof line === 'string')
+            .filter((line) => /error|failed|panicked/i.test(line))
+            .slice(-3);
+          for (const line of interesting) {
+            if (!messages.includes(line)) messages.push(line);
+          }
+        }
+        visit(context);
+      }
+      visit(node.cause);
+      return;
+    }
+
+    const record = node as Record<string, unknown>;
+    if (record.kind === 'failed' && record.error) {
+      visit(record.error);
+    }
+    for (const value of Object.values(record)) {
+      if (value && typeof value === 'object') visit(value);
+    }
+  };
+
+  visit(root);
+  return messages;
+}
+
+/**
  * Plans and executes an instruction plan, sending each transaction
  * sequentially and waiting for confirmation between them.
  *
@@ -430,6 +481,23 @@ export async function executeInstructionPlan(input: {
     },
   });
 
-  await executor(transactionPlan);
+  try {
+    await executor(transactionPlan);
+  } catch (error) {
+    if (
+      isSolanaError(error, SOLANA_ERROR__INSTRUCTION_PLANS__FAILED_TO_EXECUTE_TRANSACTION_PLAN)
+    ) {
+      // Unwrap the generic "plan failed" wrapper: the real failure (and any
+      // program logs) lives inside the attached transactionPlanResult.
+      console.error('Transaction plan failed:', error.context);
+      const details = collectFailureMessages([error.context, error.cause]).filter(
+        (message) => !message.startsWith('The provided transaction plan failed')
+      );
+      if (details.length > 0) {
+        throw new Error(details.join(' — '));
+      }
+    }
+    throw error;
+  }
   return { signatures };
 }
