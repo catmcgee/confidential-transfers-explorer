@@ -112,7 +112,8 @@ export function TransferModal({ isOpen, onClose, onTransferComplete }: TransferM
   const [isLoadingTokens, setIsLoadingTokens] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [configuringAccount, setConfiguringAccount] = useState<string | null>(null);
-  const [configureError, setConfigureError] = useState<string | null>(null);
+  // Keyed by token address so the error stays visible after configuring ends
+  const [configureError, setConfigureError] = useState<{ address: string; message: string } | null>(null);
   const configuringRef = useRef(false);
 
   // New state for operations
@@ -760,7 +761,7 @@ export function TransferModal({ isOpen, onClose, onTransferComplete }: TransferM
       } else {
         errorMessage = `Configure failed: ${String(err)}`;
       }
-      setConfigureError(errorMessage);
+      setConfigureError({ address: token.address, message: errorMessage });
     } finally {
       setConfiguringAccount(null);
       configuringRef.current = false;
@@ -1337,9 +1338,9 @@ export function TransferModal({ isOpen, onClose, onTransferComplete }: TransferM
                         </div>
 
                         <div className="pt-2 border-t border-zinc-700/50">
-                          {configureError && configuringAccount === token.address && (
+                          {configureError?.address === token.address && (
                             <div className="mb-2 p-2 bg-red-500/10 border border-red-500/20 rounded text-[10px] text-red-400">
-                              {configureError}
+                              {configureError.message}
                             </div>
                           )}
 
