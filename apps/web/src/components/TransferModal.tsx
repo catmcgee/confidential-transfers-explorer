@@ -16,7 +16,6 @@ import {
   parseElGamalPubkeyFromAccountInfo,
   type CtKeys,
 } from '@/lib/confidentialTransfer';
-import { createWalletMessageSigner, createWalletSendingSigner } from '@/lib/kitSigners';
 
 // Progress tracking type (local since it's UI-specific)
 interface TransferProgress {
@@ -108,7 +107,7 @@ function CopyButton({ text, label }: { text: string; label?: string }) {
 }
 
 export function TransferModal({ isOpen, onClose, onTransferComplete }: TransferModalProps) {
-  const { isConnected, publicKey, connect, isConnecting, signMessage, signAndSendTransaction } = useWallet();
+  const { isConnected, publicKey, connect, isConnecting, messageSigner, transactionSigner } = useWallet();
   const [tokens, setTokens] = useState<TokenAccount[]>([]);
   const [isLoadingTokens, setIsLoadingTokens] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -173,9 +172,8 @@ export function TransferModal({ isOpen, onClose, onTransferComplete }: TransferM
   const getCtKeys = async (mintAddress: string): Promise<CtKeys> => {
     const cached = cachedKeys[mintAddress];
     if (cached) return cached;
-    if (!publicKey) throw new Error('Wallet not connected');
+    if (!publicKey || !messageSigner) throw new Error('Wallet not connected');
 
-    const messageSigner = createWalletMessageSigner(publicKey, signMessage);
     try {
       const keys = await deriveCtKeys(messageSigner, publicKey, mintAddress);
       setCachedKeys(prev => ({ ...prev, [mintAddress]: keys }));
@@ -189,10 +187,10 @@ export function TransferModal({ isOpen, onClose, onTransferComplete }: TransferM
     }
   };
 
-  // Wallet-backed sending signer used as fee payer / authority for plans.
+  // Wallet-backed kit signer used as fee payer / authority for plans.
   const getWalletSigner = () => {
-    if (!publicKey) throw new Error('Wallet not connected');
-    return createWalletSendingSigner(publicKey, signAndSendTransaction);
+    if (!transactionSigner) throw new Error('Wallet not connected');
+    return transactionSigner;
   };
 
   // Select a token - reset decrypted balances, keys will be derived on decrypt

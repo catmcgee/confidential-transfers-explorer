@@ -1,11 +1,14 @@
 'use client';
 
 import { useState, useCallback, useEffect, useRef } from 'react';
+import { useConnectWallet, useWalletConnectors } from '@solana/connector/react';
 import { useWallet } from './WalletProvider';
 import { shortenAddress } from '@/lib/format';
 
 export function WalletButton() {
-  const { publicKey, isConnected, isConnecting, connect, disconnect, wallet } = useWallet();
+  const { publicKey, isConnected, isConnecting, disconnect, walletIcon } = useWallet();
+  const connectors = useWalletConnectors();
+  const { connect } = useConnectWallet();
   const [showMenu, setShowMenu] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
 
@@ -22,28 +25,71 @@ export function WalletButton() {
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, [showMenu]);
 
-  const handleConnect = useCallback(async () => {
-    try {
-      await connect();
-    } catch (error) {
-      console.error('Failed to connect:', error);
-    }
-  }, [connect]);
+  const handleConnect = useCallback(
+    async (connectorId: (typeof connectors)[number]['id']) => {
+      setShowMenu(false);
+      try {
+        await connect(connectorId);
+      } catch (error) {
+        console.error('Failed to connect:', error);
+      }
+    },
+    [connect]
+  );
 
-  const handleDisconnect = useCallback(() => {
-    disconnect();
+  const handleDisconnect = useCallback(async () => {
     setShowMenu(false);
+    try {
+      await disconnect();
+    } catch (error) {
+      console.error('Failed to disconnect:', error);
+    }
   }, [disconnect]);
 
   if (!isConnected) {
+    const installedConnectors = connectors.filter((connector) => connector.ready);
+
     return (
-      <button
-        onClick={handleConnect}
-        disabled={isConnecting}
-        className="px-3 py-1.5 text-xs font-medium text-white bg-emerald-600 hover:bg-emerald-500 disabled:bg-emerald-800 rounded transition-colors"
-      >
-        {isConnecting ? 'Connecting...' : 'Connect'}
-      </button>
+      <div className="relative">
+        <button
+          onClick={() => setShowMenu(!showMenu)}
+          disabled={isConnecting}
+          className="px-3 py-1.5 text-xs font-medium text-white bg-emerald-600 hover:bg-emerald-500 disabled:bg-emerald-800 rounded transition-colors"
+        >
+          {isConnecting ? 'Connecting...' : 'Connect'}
+        </button>
+
+        {showMenu && (
+          <div ref={menuRef} className="absolute right-0 mt-2 w-56 bg-zinc-900 border border-zinc-800 rounded-lg shadow-xl z-20">
+            <div className="p-3 border-b border-zinc-800">
+              <div className="text-[10px] text-zinc-500 uppercase tracking-wider">Select wallet</div>
+            </div>
+            <div className="p-2">
+              {installedConnectors.length === 0 ? (
+                <p className="px-3 py-2 text-xs text-zinc-500">
+                  No wallet found. Please install a Solana wallet.
+                </p>
+              ) : (
+                installedConnectors.map((connector) => (
+                  <button
+                    key={connector.id}
+                    onClick={() => handleConnect(connector.id)}
+                    className="w-full flex items-center gap-2 px-3 py-2 text-left text-xs text-zinc-200 hover:bg-zinc-800 rounded transition-colors"
+                  >
+                    {connector.icon ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img src={connector.icon} alt="" className="w-4 h-4 rounded" />
+                    ) : (
+                      <div className="w-4 h-4 rounded-full bg-gradient-to-br from-emerald-400 to-teal-500" />
+                    )}
+                    {connector.name}
+                  </button>
+                ))
+              )}
+            </div>
+          </div>
+        )}
+      </div>
     );
   }
 
@@ -53,7 +99,12 @@ export function WalletButton() {
         onClick={() => setShowMenu(!showMenu)}
         className="flex items-center gap-2 px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 rounded transition-colors"
       >
-        <div className={`w-5 h-5 rounded-full ${wallet?.name === 'Dev Wallet' ? 'bg-gradient-to-br from-orange-400 to-amber-500' : 'bg-gradient-to-br from-emerald-400 to-teal-500'}`} />
+        {walletIcon ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img src={walletIcon} alt="" className="w-5 h-5 rounded-full" />
+        ) : (
+          <div className="w-5 h-5 rounded-full bg-gradient-to-br from-emerald-400 to-teal-500" />
+        )}
         <span className="font-mono text-xs text-zinc-200">
           {shortenAddress(publicKey!, 4)}
         </span>
