@@ -12,8 +12,9 @@ import {
   useWalletConnectors,
   useWalletInfo,
 } from '@solana/connector/react';
-import { createKitSignersFromWallet, createSolanaDevnet } from '@solana/connector/headless';
+import { createMessageSignerFromWallet, createSolanaDevnet } from '@solana/connector/headless';
 import {
+  address,
   createSignableMessage,
   type MessagePartialSigner,
   type SignatureDictionary,
@@ -77,12 +78,35 @@ function WalletContextBridge({ children }: { children: ReactNode }) {
   );
   const standardAccount = session?.selectedAccount.account ?? null;
 
-  // ConnectorKit's headless helper wires the wallet's `solana:signMessage`
-  // feature into a kit message signer.
-  const walletMessageSigner = useMemo(
-    () => createKitSignersFromWallet(standardWallet, standardAccount, null, 'devnet').messageSigner,
-    [standardWallet, standardAccount]
-  );
+  // Wire the wallet's `solana:signMessage` feature into a kit message signer.
+  // NOTE: we call the feature directly with only { account, message } — the
+  // Wallet Standard signMessage input. ConnectorKit's createKitSignersFromWallet
+  // additionally passes a genesis-hash `chain` value that wallets reject,
+  // which surfaces as "Failed to sign message".
+  const walletMessageSigner = useMemo(() => {
+    if (!standardWallet || !standardAccount) return null;
+    const signFeature = standardWallet.features['solana:signMessage'] as
+      | {
+          signMessage: (input: {
+            account: typeof standardAccount;
+            message: Uint8Array;
+          }) => Promise<readonly { signature: Uint8Array }[]>;
+        }
+      | undefined;
+    if (!signFeature) return null;
+
+    return createMessageSignerFromWallet(address(standardAccount.address), async (message) => {
+      const results = await signFeature.signMessage({
+        account: standardAccount,
+        message: message instanceof Uint8Array ? message : new Uint8Array(message),
+      });
+      const signature = results?.[0]?.signature;
+      if (!signature) {
+        throw new Error('Wallet returned no signature');
+      }
+      return signature;
+    });
+  }, [standardWallet, standardAccount]);
 
   // Raw bytes-in/bytes-out signing for auth login.
   const signMessage = useCallback(
