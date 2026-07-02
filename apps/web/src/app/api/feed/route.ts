@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { feedQuerySchema, pubkeySchema, apiResponse, apiError } from '@ct-explorer/shared';
 import type { FeedResponse } from '@ct-explorer/shared';
-import { fetchFeedFromIndexer, fetchActivityFromIndexer } from '@/lib/indexer';
 import { fetchActivityPageFromRpc, fetchFeedPageFromRpc } from '@/lib/rpc';
 
 export async function GET(request: NextRequest) {
@@ -32,27 +31,21 @@ export async function GET(request: NextRequest) {
         });
       }
 
-      let result;
-      try {
-        result = await fetchActivityFromIndexer(address, limit, cursor ?? null, type);
-      } catch {
-        result = await fetchActivityPageFromRpc(address, limit, cursor ?? null, type);
-      }
+      const result = await fetchActivityPageFromRpc(address, limit, cursor ?? null, type);
 
       const response: FeedResponse = {
         activities: result.activities,
         cursor: result.cursor,
         hasMore: result.hasMore,
       };
-      return NextResponse.json(apiResponse(response));
+      return NextResponse.json(apiResponse(response), {
+        headers: {
+          'Cache-Control': 'public, s-maxage=30, stale-while-revalidate=300',
+        },
+      });
     }
 
-    let result;
-    try {
-      result = await fetchFeedFromIndexer(limit, cursor ?? null, type);
-    } catch {
-      result = await fetchFeedPageFromRpc(limit, cursor ?? null, type);
-    }
+    const result = await fetchFeedPageFromRpc(limit, cursor ?? null, type);
 
     const response: FeedResponse = {
       activities: result.activities,
@@ -60,7 +53,11 @@ export async function GET(request: NextRequest) {
       hasMore: result.hasMore,
     };
 
-    return NextResponse.json(apiResponse(response));
+    return NextResponse.json(apiResponse(response), {
+      headers: {
+        'Cache-Control': 'public, s-maxage=30, stale-while-revalidate=300',
+      },
+    });
   } catch (error) {
     console.error('[API] Feed error:', error);
     return NextResponse.json(apiError('Internal server error', 'INTERNAL_ERROR'), {

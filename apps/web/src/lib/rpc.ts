@@ -1,5 +1,6 @@
 import {
   TOKEN_2022_PROGRAM_ID,
+  ZK_ELGAMAL_PROOF_PROGRAM_ID,
   type CTActivityResponse,
   type MintInfo,
   type RawInstructionSummary,
@@ -19,6 +20,11 @@ const BALANCE_TTL = 30_000;
 const RPC_TIMEOUT_MS = 8_000;
 const RPC_RETRIES = 1;
 const MAX_SIGNATURE_SCAN_ROUNDS = 8;
+// Hard wall-clock budget for a single activity scan. Serverless functions
+// have tight execution limits, and public RPCs rate-limit aggressively —
+// when the budget runs out we return what we have with a cursor so the
+// client can keep paginating.
+const SCAN_TIME_BUDGET_MS = 6_000;
 
 const PARSED_TYPE_MAP: Record<string, string> = {
   confidentialTransfer: 'Transfer',
@@ -225,11 +231,13 @@ function decodeCursor(cursor: string | null): ActivityCursorState | null {
 }
 
 function getActivityScanConfig(address: string, limit: number): ActivityScanConfig {
-  if (address === TOKEN_2022_PROGRAM_ID) {
+  if (address === ZK_ELGAMAL_PROOF_PROGRAM_ID || address === TOKEN_2022_PROGRAM_ID) {
+    // Keep cold scans well under serverless function timeouts: fewer rounds
+    // per request, with pagination (cursor / "Load more") covering depth.
     return {
       signatureBatchSize: Math.min(Math.max(limit * 2, 10), 25),
       txBatchSize: 5,
-      maxRounds: Math.min(Math.max(limit + 2, 4), 12),
+      maxRounds: Math.min(Math.max(Math.ceil(limit / 2), 3), 6),
     };
   }
 
@@ -577,8 +585,14 @@ export async function fetchActivityPageFromRpc(
     let hadError = false;
     let lastScannedSignature: string | null = before ?? null;
     const { signatureBatchSize, txBatchSize, maxRounds } = getActivityScanConfig(address, limit);
+    const scanDeadline = Date.now() + SCAN_TIME_BUDGET_MS;
+    let budgetExceeded = false;
 
     while (collected.length < limit + 1 && rounds < maxRounds) {
+      if (Date.now() >= scanDeadline) {
+        budgetExceeded = true;
+        break;
+      }
       let signatures: RpcSignatureInfo[];
       try {
         signatures = await rpcCall<RpcSignatureInfo[]>('getSignaturesForAddress', [
@@ -605,6 +619,11 @@ export async function fetchActivityPageFromRpc(
         batchStart < signatures.length && collected.length < limit + 1;
         batchStart += txBatchSize
       ) {
+        if (Date.now() >= scanDeadline) {
+          budgetExceeded = true;
+          break;
+        }
+
         const batch = signatures.slice(batchStart, batchStart + txBatchSize);
         const results = await Promise.all(
           batch.map(async (signatureInfo) => {
@@ -618,7 +637,13 @@ export async function fetchActivityPageFromRpc(
           collected.push(activity);
           if (collected.length >= limit + 1) break;
         }
+
+        // Track the last fully processed signature so the cursor resumes
+        // exactly where a budget-limited scan left off.
+        lastScannedSignature = batch[batch.length - 1]?.signature ?? lastScannedSignature;
       }
+
+      if (budgetExceeded) break;
 
       lastScannedSignature = signatures[signatures.length - 1]?.signature ?? lastScannedSignature;
       if (signatures.length < signatureBatchSize) {
@@ -630,7 +655,7 @@ export async function fetchActivityPageFromRpc(
 
     const activities = collected.slice(0, limit);
     const carryover = collected.slice(limit);
-    const hasMore = carryover.length > 0 || hadError || !exhausted;
+    const hasMore = carryover.length > 0 || hadError || budgetExceeded || !exhausted;
     const result: ActivityPageResult = {
       activities,
       cursor:
@@ -660,7 +685,14 @@ export async function fetchFeedPageFromRpc(
   cursor: string | null = null,
   type: string = 'all'
 ): Promise<ActivityPageResult> {
-  return fetchActivityPageFromRpc(TOKEN_2022_PROGRAM_ID, limit, cursor, type);
+  // Anchor the global feed scan on the ZK ElGamal Proof Program rather than
+  // the Token-2022 program. On public clusters the Token-2022 program has
+  // enormous unrelated traffic, while the ZK proof program is referenced
+  // almost exclusively by confidential-transfer flows (proof verification
+  // and context-state closing happen in the same transactions as the
+  // transfer/withdraw/configure instructions), so its signature history is
+  // a concentrated feed of CT activity.
+  return fetchActivityPageFromRpc(ZK_ELGAMAL_PROOF_PROGRAM_ID, limit, cursor, type);
 }
 
 /**

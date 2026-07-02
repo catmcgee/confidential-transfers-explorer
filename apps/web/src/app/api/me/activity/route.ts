@@ -2,7 +2,6 @@ import { NextRequest, NextResponse } from 'next/server';
 import { addressQuerySchema, apiResponse, apiError } from '@ct-explorer/shared';
 import type { UserActivityResponse } from '@ct-explorer/shared';
 import { getSession } from '@/lib/auth';
-import { fetchActivityFromIndexer } from '@/lib/indexer';
 import { fetchActivityPageFromRpc } from '@/lib/rpc';
 
 export async function GET(request: NextRequest) {
@@ -32,12 +31,7 @@ export async function GET(request: NextRequest) {
 
     const { limit, cursor, type } = parseResult.data;
 
-    let result;
-    try {
-      result = await fetchActivityFromIndexer(session.publicKey, limit, cursor ?? null, type);
-    } catch {
-      result = await fetchActivityPageFromRpc(session.publicKey, limit, cursor ?? null, type);
-    }
+    const result = await fetchActivityPageFromRpc(session.publicKey, limit, cursor ?? null, type);
 
     const response: UserActivityResponse = {
       publicKey: session.publicKey,

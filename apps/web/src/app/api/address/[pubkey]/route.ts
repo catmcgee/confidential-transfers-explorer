@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { addressQuerySchema, pubkeySchema, apiResponse, apiError } from '@ct-explorer/shared';
 import type { AddressActivityResponse } from '@ct-explorer/shared';
-import { fetchActivityFromIndexer } from '@/lib/indexer';
 import { fetchActivityPageFromRpc } from '@/lib/rpc';
 
 export async function GET(
@@ -36,12 +35,7 @@ export async function GET(
 
     const { limit, cursor, type } = parseResult.data;
 
-    let result;
-    try {
-      result = await fetchActivityFromIndexer(pubkey, limit, cursor ?? null, type);
-    } catch {
-      result = await fetchActivityPageFromRpc(pubkey, limit, cursor ?? null, type);
-    }
+    const result = await fetchActivityPageFromRpc(pubkey, limit, cursor ?? null, type);
 
     const response: AddressActivityResponse = {
       address: pubkey,
@@ -50,7 +44,11 @@ export async function GET(
       hasMore: result.hasMore,
     };
 
-    return NextResponse.json(apiResponse(response));
+    return NextResponse.json(apiResponse(response), {
+      headers: {
+        'Cache-Control': 'public, s-maxage=30, stale-while-revalidate=300',
+      },
+    });
   } catch (error) {
     console.error('[API] Address activity error:', error);
     return NextResponse.json(apiError('Internal server error', 'INTERNAL_ERROR'), {

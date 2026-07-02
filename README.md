@@ -1,6 +1,6 @@
-# CT Explorer - Confidential Transfer Indexer & Explorer
+# CT Explorer - Confidential Transfer Explorer
 
-A simple, clean indexer and explorer for Token-2022 Confidential Transfer activity on Solana devnet.
+A simple, clean explorer for Token-2022 Confidential Transfer activity on Solana devnet. Fully RPC-driven — no indexer, no database.
 
 ## Features
 
@@ -16,27 +16,32 @@ A simple, clean indexer and explorer for Token-2022 Confidential Transfer activi
 ```
 conf-transfers-explorer/
 ├── apps/
-│   ├── indexer/     # Node service that indexes chain → SQLite
-│   └── web/         # Next.js app serving UI + API
+│   └── web/         # Next.js app serving UI + API (RPC-only, no DB)
 ├── packages/
 │   └── shared/      # Shared types, schemas, constants
-├── scripts/         # Mint setup scripts
-└── data/            # SQLite database (created at runtime)
+└── scripts/         # Mint setup scripts
 ```
 
-All ZK proof generation happens client-side in TypeScript/WebAssembly via
-`@solana/zk-sdk` — no separate proof server is required. (The legacy
-`rust-ct/` server is no longer used.)
+- **No indexer**: all data comes straight from the Solana RPC. The global
+  feed anchors its scan on the ZK ElGamal Proof Program
+  (`ZkE1Gama1Proof11111111111111111111111111111`) — it's referenced almost
+  exclusively by confidential-transfer flows, so its signature history is a
+  concentrated CT feed even on busy public clusters.
+- **Caching for Vercel**: API responses carry `Cache-Control: s-maxage` +
+  `stale-while-revalidate` headers so Vercel's edge CDN serves repeat
+  requests without touching the RPC. Transaction details (immutable) are
+  cached for a day at the edge. An in-memory cache dedupes RPC work within
+  warm serverless instances.
+- **ZK proofs**: generated client-side in TypeScript/WebAssembly via
+  `@solana/zk-sdk` — no proof server.
 
 ## Tech Stack
 
 - **Frontend**: Next.js 15, React 19, Tailwind CSS
-- **Backend**: Next.js API Routes
+- **Backend**: Next.js API Routes (stateless, RPC-only)
 - **Solana**: `@solana/kit` 6.x, `@solana-program/token-2022` 0.12.x
 - **ZK Proofs**: `@solana/zk-sdk` 0.4.x (WASM) + the confidential-transfer
   instruction-plan helpers from `@solana-program/token-2022/confidential`
-- **Indexer**: Bun with `@solana/kit`
-- **Database**: SQLite via better-sqlite3
 - **Auth**: JWT sessions with wallet signature verification
 
 ## Getting Started
@@ -114,14 +119,16 @@ Moves tokens from confidential available balance back to public balance
 
 ## API Endpoints
 
+All public endpoints are CDN-cacheable (`s-maxage` + `stale-while-revalidate`).
+
 ### Public Endpoints
 
-| Endpoint | Description |
-|----------|-------------|
-| `GET /api/feed?limit=50&type=all` | Global CT activity feed |
-| `GET /api/address/:pubkey?limit=50` | Activity for specific address |
-| `GET /api/tx/:sig` | Transaction details |
-| `GET /api/mints` | List of tracked mints |
+| Endpoint | Description | Edge cache |
+|----------|-------------|------------|
+| `GET /api/feed?limit=50&type=all` | Global CT activity feed | 30s (+SWR 5m) |
+| `GET /api/address/:pubkey?limit=50` | Activity for specific address | 30s (+SWR 5m) |
+| `GET /api/tx/:sig` | Transaction details (immutable) | 24h (+SWR 7d) |
+| `GET /api/mints` | Recently active CT mints | 5m (+SWR 15m) |
 
 ### Authenticated Endpoints
 
@@ -146,19 +153,24 @@ Moves tokens from confidential available balance back to public balance
 
 ## How CT Data is Detected
 
-The indexer monitors the Token-2022 program for Confidential Transfer extension instructions:
+1. **Feed scan anchor**: the global feed lists signatures of the ZK ElGamal
+   Proof Program. Proof verification / context-state closing happen in the
+   same transactions as (or adjacent to) the CT instructions, so nearly
+   every signature is CT-related — unlike the Token-2022 program, whose
+   devnet history is dominated by unrelated token traffic.
 
-1. **Program ID Filter**: Only processes transactions involving `TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb`
-
-2. **Instruction Detection**: CT instructions are identified by:
+2. **Instruction Detection**: within each transaction, CT instructions on
+   `TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb` are identified by:
    - First byte: `27` (ConfidentialTransfer extension discriminator)
    - Second byte: Instruction type (InitializeMint=0, Deposit=5, Withdraw=6, Transfer=7, etc.)
 
-3. **Account Resolution**: From/To owners are inferred from:
-   - `preTokenBalances`/`postTokenBalances` metadata (preferred)
-   - Instruction account positions (fallback)
+3. **Account Resolution**: From/To owners are inferred from
+   `preTokenBalances`/`postTokenBalances` metadata, falling back to
+   instruction account positions.
 
-4. **Ciphertext Extraction**: For transfers, ElGamal ciphertexts are extracted from instruction data and stored as base64.
+4. **Address pages** scan the address's own signature history, which
+   includes deposits and apply-pending operations that never touch the ZK
+   proof program.
 
 ## Client-Side Key Derivation
 
@@ -178,6 +190,8 @@ An end-to-end test runs the entire flow (create mint → configure accounts →
 deposit → apply → confidential transfer → withdraw) against devnet:
 
 ```bash
+cd apps/web && bun run test:e2e
+# or directly:
 NODE_OPTIONS=--experimental-wasm-modules npx tsx apps/web/scripts/e2e-confidential-transfer.ts
 ```
 
@@ -186,31 +200,24 @@ Notes:
 - Needs a funded devnet key in `FAUCET_PRIVATE_KEY` (apps/web/.env) or a
   successful devnet airdrop (rate-limited).
 
+## Deployment (Vercel)
+
+The app is a single Next.js project (`apps/web`) with no database or
+long-running services — it deploys straight to Vercel. Set:
+
+- `NEXT_PUBLIC_SOLANA_RPC_URL` — use a dedicated RPC (Helius/QuickNode/Triton)
+  in production; the public devnet endpoint rate-limits aggressively
+- `NEXT_PUBLIC_NETWORK_NAME=devnet`
+- `JWT_SECRET`, `FAUCET_PRIVATE_KEY`, `CT_FAUCET_MINT` (for the faucet)
+
+The CDN cache headers keep RPC usage low: repeat feed views hit the edge
+cache, and immutable transaction lookups are cached for a day.
+
 ## Security Notes
 
 - **Keys Never Leave Browser**: encryption keys are derived from wallet signatures client-side
 - **Signature Verification**: Login requires signing a timestamped message
 - **Session Tokens**: JWTs are httpOnly cookies with 24h expiration
-- **Read-Only Database**: Web app opens database in read-only mode
-
-## Development
-
-### Project Scripts
-
-```bash
-bun run dev              # Start web app in dev mode (from apps/web)
-bun run build            # Build all packages
-bun run lint             # Lint all packages
-bun run format           # Format code with Prettier
-bun run typecheck        # Run TypeScript type checking
-bun run setup:mint       # Create a CT-enabled devnet mint
-```
-
-### Adding New Features
-
-1. Add shared types to `packages/shared/src/types.ts`
-2. Add API routes in `apps/web/src/app/api/`
-3. Add UI components in `apps/web/src/components/`
 
 ## Troubleshooting
 
@@ -218,11 +225,9 @@ bun run setup:mint       # Create a CT-enabled devnet mint
 The public devnet faucet is rate-limited. Fund the `FAUCET_PRIVATE_KEY`
 wallet at https://faucet.solana.com if airdrops fail.
 
-### "Transaction too large" errors
-Confidential transfers must use the multi-transaction context-state flow on
-devnet — the instruction-plan helpers do this automatically. If you see this
-error, make sure you're using `createTransferPlan`/`createWithdrawPlan`
-rather than building a single transaction manually.
+### Slow or empty feed
+The public devnet RPC rate-limits scan queries. Use a dedicated RPC via
+`NEXT_PUBLIC_SOLANA_RPC_URL` for consistently fast feeds.
 
 ### Balance mismatch errors
 This usually means the account was configured with different keys. Create a

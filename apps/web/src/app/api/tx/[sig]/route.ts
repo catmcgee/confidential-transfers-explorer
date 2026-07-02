@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { signatureSchema, apiResponse, apiError } from '@ct-explorer/shared';
-import { fetchTxFromIndexer } from '@/lib/indexer';
 import { fetchTransactionDetailFromRpc } from '@/lib/rpc';
 
 export async function GET(
@@ -18,17 +17,7 @@ export async function GET(
       });
     }
 
-    let tx;
-    try {
-      tx = await fetchTxFromIndexer(sig);
-    } catch {
-      tx = null;
-    }
-
-    // Fall back to RPC if indexer doesn't have it
-    if (!tx) {
-      tx = await fetchTransactionDetailFromRpc(sig);
-    }
+    const tx = await fetchTransactionDetailFromRpc(sig);
 
     if (!tx || tx.activities.length === 0) {
       return NextResponse.json(apiError('Transaction not found', 'NOT_FOUND'), {
@@ -36,7 +25,12 @@ export async function GET(
       });
     }
 
-    return NextResponse.json(apiResponse(tx));
+    // Confirmed transactions are immutable — cache aggressively at the CDN.
+    return NextResponse.json(apiResponse(tx), {
+      headers: {
+        'Cache-Control': 'public, s-maxage=86400, stale-while-revalidate=604800',
+      },
+    });
   } catch (error) {
     console.error('[API] Transaction detail error:', error);
     return NextResponse.json(apiError('Internal server error', 'INTERNAL_ERROR'), {

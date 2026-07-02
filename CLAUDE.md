@@ -19,6 +19,7 @@ Node (bun cannot load the WASM ESM modules):
 
 ## Development
 - Run dev server: `bun dev` (from apps/web)
+- No indexer/database: the explorer is fully RPC-driven (feed anchors on the ZK ElGamal Proof Program); API routes set CDN cache headers for Vercel
 - The app runs on localhost:3000
 
 ## Confidential Transfers
