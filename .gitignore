@@ -47,3 +47,4 @@ coverage/
 rust-ct/
 *.tsbuildinfo
 apps/web/scripts/test-recipient.json
+apps/web/scripts/workshop/state.json
