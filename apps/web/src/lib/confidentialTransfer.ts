@@ -9,6 +9,7 @@
 
 import {
   address,
+  createSignableMessage,
   createTransactionMessage,
   createTransactionPlanExecutor,
   createTransactionPlanner,
@@ -87,14 +88,32 @@ export interface CtKeys {
   elgamalPubkeyBytes: Uint8Array;
 }
 
+async function signSeedText(signer: MessagePartialSigner, text: string): Promise<Uint8Array> {
+  const [dictionary] = await signer.signMessages([
+    createSignableMessage(new TextEncoder().encode(text)),
+  ]);
+  const signature = dictionary?.[signer.address];
+  if (!signature) {
+    throw new Error('Wallet returned no signature for key derivation');
+  }
+  return new Uint8Array(signature);
+}
+
 /**
  * Derives the ElGamal keypair and AES key for an `(owner, mint)` pair from
- * wallet signatures, using the official derivation from
- * `@solana-program/token-2022/confidential` (the signer signs a
- * domain-separated message; the signature seeds the key).
+ * wallet signatures: the signer signs a deterministic, domain-separated
+ * message and the Ed25519 signature seeds the key (via the ZK SDK's
+ * `fromSignature`).
+ *
+ * The signed messages are human-readable UTF-8 text
+ * (`ElGamalSecretKey:<owner>:<mint>`) rather than the raw-byte message the
+ * token-2022 helpers use — Phantom refuses to sign opaque binary payloads
+ * that could conceal a transaction ("You cannot sign solana transactions
+ * using sign message"), and readable text is also better wallet UX.
  *
  * The keys are bound to owner+mint, so they remain stable if the token
- * account is closed and reopened.
+ * account is closed and reopened, and re-derivable on any device with the
+ * same wallet.
  */
 export async function deriveCtKeys(
   signer: MessagePartialSigner,
@@ -102,17 +121,16 @@ export async function deriveCtKeys(
   mintAddress: string
 ): Promise<CtKeys> {
   const zk = await getZkSdk();
-  const helpers = await getCtHelpers();
 
   const owner = address(ownerAddress);
   const mint = address(mintAddress);
 
-  const { secretKey } = await helpers.deriveElGamalKeypairForOwnerMint({ signer, owner, mint });
-  const elgamalSecretKey = zk.ElGamalSecretKey.fromBytes(secretKey);
-  const elgamalKeypair = zk.ElGamalKeypair.fromSecretKey(elgamalSecretKey);
+  const elgamalSignature = await signSeedText(signer, `ElGamalSecretKey:${owner}:${mint}`);
+  const elgamalKeypair = zk.ElGamalKeypair.fromSignature(elgamalSignature);
+  const elgamalSecretKey = elgamalKeypair.secret();
 
-  const aeKeyBytes = await helpers.deriveAeKeyForOwnerMint({ signer, owner, mint });
-  const aesKey = zk.AeKey.fromBytes(aeKeyBytes);
+  const aeSignature = await signSeedText(signer, `AeKey:${owner}:${mint}`);
+  const aesKey = zk.AeKey.fromSignature(aeSignature);
 
   return {
     elgamalKeypair,
