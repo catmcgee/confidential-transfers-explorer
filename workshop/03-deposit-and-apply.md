@@ -1,8 +1,12 @@
 # Step 03 — Deposit and Apply: the Three Balances
 
-## What happens in this step
+## In the app
 
-We mint 1000 public tokens to Alice, move 500 of them into her confidential *pending* balance with a `Deposit`, and then fold that pending amount into her spendable *available* balance with `ApplyPendingBalance`. Watching the printed balances after each stage is the whole lesson: value flows public → pending → available, and only then is it spendable confidentially. One honest caveat to state on stage: the deposit **amount is public** — anyone can see 500 tokens entered the confidential system. Privacy starts once tokens are inside.
+Once a token is configured, the [deployed app](https://confidential-transfers-explorer-web.vercel.app) shows two more buttons: **Deposit** (public → pending) and **Apply Pending** (pending → available). This step is those two buttons under the hood. The production implementation lives in [`apps/web/src/lib/confidentialTransfer.ts`](https://github.com/catmcgee/confidential-transfers-explorer/blob/main/apps/web/src/lib/confidentialTransfer.ts), driven from the deposit/apply flows in [`apps/web/src/components/TransferModal.tsx`](https://github.com/catmcgee/confidential-transfers-explorer/blob/main/apps/web/src/components/TransferModal.tsx).
+
+## What happens under the hood
+
+The script below mints 1000 public tokens to Alice, moves 500 of them into her confidential *pending* balance with a `Deposit`, and then folds that pending amount into her spendable *available* balance with `ApplyPendingBalance`. Watching the printed balances after each stage is the whole lesson: value flows public → pending → available, and only then is it spendable confidentially. One honest caveat: the deposit **amount is public** — anyone can see 500 tokens entered the confidential system. Privacy starts once tokens are inside.
 
 ![Pending vs available, and ApplyPendingBalance between them](assets/pending-vs-available.png)
 
@@ -30,9 +34,11 @@ flowchart TD
     style APPLY fill:#d5f9e8,stroke:#10b981
 ```
 
-Small exponents keep the discrete-log search fast; the owner reassembles the true amount as `lo + (hi << 16)`. (Our `helpers.ts` `decryptPending` does exactly this.)
+Small exponents keep the discrete-log search fast; the owner reassembles the true amount as `lo + (hi << 16)`. (`decryptPending` in `helpers.ts` does exactly this.)
 
 ## The key code (from `03-deposit-and-apply.ts`)
+
+The code below is a minimal standalone version of exactly what the app's **Deposit** and **Apply Pending** buttons do — you can run it against devnet:
 
 ```ts
 // public -> encrypted pending (the amount here is a PUBLIC instruction arg!)
@@ -55,10 +61,10 @@ getApplyConfidentialPendingBalanceInstructionFromToken({
 Run it:
 
 ```bash
-NODE_OPTIONS=--experimental-wasm-modules npx tsx apps/web/scripts/workshop/03-deposit-and-apply.ts
+NODE_OPTIONS=--experimental-wasm-modules npx tsx workshop/03-deposit-and-apply.ts
 ```
 
-Point at the three balance lines printed after each stage — public 1000/0/0 → 500/500/0 → 500/0/500.
+Watch the three balance lines printed after each stage — public 1000/0/0 → 500/500/0 → 500/0/500.
 
 ## Protocol internals
 
@@ -102,13 +108,13 @@ confidential_transfer_account.pending_balance_hi = EncryptedBalance::zeroed();
 
 If `expected` ≠ `actual` counter, the owner's AES cache is stale — clients detect this and re-apply. The state fields live in [interface/src/extension/confidential_transfer/mod.rs](https://github.com/solana-program/token-2022/blob/main/interface/src/extension/confidential_transfer/mod.rs).
 
-## What to say if asked
+## FAQ
 
-**"Why is the deposit amount public? Doesn't that leak everything?"**
+**Why is the deposit amount public? Doesn't that leak everything?**
 Entering and exiting the confidential system is public (deposit/withdraw); movement *inside* it is not. Think of it like an on/off-ramp: observers see totals entering, but not how value moves once inside. Serious privacy usage keeps balances inside.
 
-**"What happens if someone credits me while I'm applying?"**
+**What happens if someone credits me while I'm applying?**
 That's what the credit counter is for — the owner signs the counter value they decrypted against; if more credits landed since, the mismatch is visible on-chain and the client re-applies. Funds are never lost, the AES cache is just refreshed.
 
-**"Why 48-bit max deposits?"**
+**Why 48-bit max deposits?**
 So the hi chunk stays ≤ 32 bits, keeping the owner's ElGamal discrete-log decryption tractable. Amounts larger than 2^48 raw units just take multiple deposits.

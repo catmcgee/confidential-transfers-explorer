@@ -24,7 +24,7 @@
  *   right there in the instruction data.
  *
  * RUN (amount in tokens is optional, default 123)
- *   NODE_OPTIONS=--experimental-wasm-modules npx tsx apps/web/scripts/workshop/04-confidential-transfer.ts [amount]
+ *   NODE_OPTIONS=--experimental-wasm-modules npx tsx workshop/04-confidential-transfer.ts [amount]
  */
 import { address } from '@solana/kit';
 import { fetchToken } from '@solana-program/token-2022';

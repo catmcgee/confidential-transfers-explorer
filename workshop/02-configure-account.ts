@@ -23,7 +23,7 @@
  *   elgamalPubkey field.
  *
  * RUN
- *   NODE_OPTIONS=--experimental-wasm-modules npx tsx apps/web/scripts/workshop/02-configure-account.ts
+ *   NODE_OPTIONS=--experimental-wasm-modules npx tsx workshop/02-configure-account.ts
  */
 import { address, nonDivisibleSequentialInstructionPlan } from '@solana/kit';
 import { TOKEN_2022_PROGRAM_ADDRESS, findAssociatedTokenPda } from '@solana-program/token-2022';

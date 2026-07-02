@@ -1,8 +1,12 @@
-# Step 05 — Bob Decrypts (and What Everyone Else Sees)
+# Step 05 — Decrypting (and What Everyone Else Sees)
 
-## What happens in this step
+## In the app
 
-The payoff. Bob re-derives his keys by signing the same two text messages from step 02, decrypts his *pending* balance with his ElGamal secret key — and sees the exact amount Alice sent. He applies it to his *available* balance and reads his new spendable total instantly via his AES key. Before and after, the script prints the **raw base64 ciphertexts** from his account: that identical byte-noise is all the explorer, the RPC provider, and every validator will ever see. Same account, same bytes — the only difference is holding the key.
+Confidential balances in the [deployed app](https://confidential-transfers-explorer-web.vercel.app) show as **Click to decrypt**. Click, sign the two derivation messages from step 02, and the ciphertext resolves to a number — for you, and only you. Everyone else (the explorer UI, the RPC provider, every validator) keeps seeing opaque bytes. The production implementation is `deriveCtKeys` plus the decrypt helpers in [`apps/web/src/lib/confidentialTransfer.ts`](https://github.com/catmcgee/confidential-transfers-explorer/blob/main/apps/web/src/lib/confidentialTransfer.ts), wired up in [`apps/web/src/components/TransferModal.tsx`](https://github.com/catmcgee/confidential-transfers-explorer/blob/main/apps/web/src/components/TransferModal.tsx).
+
+## What happens under the hood
+
+The payoff. In the script below, Bob re-derives his keys by signing the same two text messages from step 02, decrypts his *pending* balance with his ElGamal secret key — and sees the exact amount Alice sent. He applies it to his *available* balance and reads his new spendable total instantly via his AES key. Before and after, the script prints the **raw base64 ciphertexts** from his account: that identical byte-noise is all the explorer, the RPC provider, and every validator will ever see. Same account, same bytes — the only difference is holding the key.
 
 ![The recipient flow: funds arrive → apply pending → decrypt](assets/recipient-flow.png)
 
@@ -32,6 +36,8 @@ flowchart TD
 
 ## The key code (from `05-decrypt.ts` / `helpers.ts`)
 
+The code below is a minimal standalone version of exactly what the app's **Click to decrypt** does — you can run it against devnet:
+
 ```ts
 // what an outsider sees — just bytes off the account
 console.log(toBase64(ct.pendingBalanceLow));   // gl6KNHyU54NR1SGeS2pXIs5FrCw0...
@@ -48,10 +54,10 @@ const available = aesKey.decrypt(AeCiphertext.fromBytes(ct.decryptableAvailableB
 Run it:
 
 ```bash
-NODE_OPTIONS=--experimental-wasm-modules npx tsx apps/web/scripts/workshop/05-decrypt.ts
+NODE_OPTIONS=--experimental-wasm-modules npx tsx workshop/05-decrypt.ts
 ```
 
-Point at the "outsider" block first (ciphertext), then the decrypted numbers right below. In the web app this is the "encrypted" badge everyone sees versus the unlocked balance after the wallet signs the two derivation messages.
+Look at the "outsider" block first (ciphertext), then the decrypted numbers right below. In the web app this is the "encrypted" badge everyone sees versus the unlocked balance after the wallet signs the two derivation messages.
 
 ## Protocol internals
 
@@ -91,13 +97,13 @@ confidential_transfer_account.decryptable_available_balance =
     *new_decryptable_available_balance;   // only Bob could have produced this
 ```
 
-## What to say if asked
+## FAQ
 
-**"If the AES cache is only written by the owner, can a malicious owner lie in it?"**
+**If the AES cache is only written by the owner, can a malicious owner lie in it?**
 Only to themselves. The AES field is a convenience cache — every *proof* (and all on-chain arithmetic) runs against the ElGamal `available_balance`. Corrupting your own cache just breaks your own client until it re-derives the true value.
 
-**"How slow is 'slow' ElGamal decryption?"**
+**How slow is 'slow' ElGamal decryption?**
 Sub-second here: the chunks are ≤ 32 bits and the search uses a lookup table + baby-step giant-step. That's exactly why the protocol never stores amounts bigger than 48 bits in a single pending balance chunk pair.
 
-**"So what does the explorer actually show for these accounts?"**
+**So what does the explorer actually show for these accounts?**
 Exactly what this script printed in the outsider block: the extension exists, the pubkey is visible, and every balance field is opaque ciphertext — the deployed explorer renders that as "encrypted" unless *your* wallet signs the derivation messages.

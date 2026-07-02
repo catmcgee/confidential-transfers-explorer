@@ -23,7 +23,7 @@
  *   unlocked balance after signing.
  *
  * RUN
- *   NODE_OPTIONS=--experimental-wasm-modules npx tsx apps/web/scripts/workshop/05-decrypt.ts
+ *   NODE_OPTIONS=--experimental-wasm-modules npx tsx workshop/05-decrypt.ts
  */
 import { address } from '@solana/kit';
 import { fetchToken } from '@solana-program/token-2022';

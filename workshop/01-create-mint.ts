@@ -22,7 +22,7 @@
  *   account: "ConfidentialTransferMint" sits right next to ordinary mint data.
  *
  * RUN
- *   NODE_OPTIONS=--experimental-wasm-modules npx tsx apps/web/scripts/workshop/01-create-mint.ts
+ *   NODE_OPTIONS=--experimental-wasm-modules npx tsx workshop/01-create-mint.ts
  */
 import { generateKeyPairSigner, nonDivisibleSequentialInstructionPlan } from '@solana/kit';
 import {

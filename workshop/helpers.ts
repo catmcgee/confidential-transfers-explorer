@@ -49,7 +49,7 @@ import { AeCiphertext, AeKey, ElGamalCiphertext, ElGamalKeypair, ElGamalSecretKe
 // ---------------------------------------------------------------------------
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const WEB_ENV_PATH = resolve(HERE, '../../.env'); // apps/web/.env
+const WEB_ENV_PATH = resolve(HERE, '../apps/web/.env');
 
 export function readEnvVar(name: string): string | undefined {
   if (process.env[name]) return process.env[name];

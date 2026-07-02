@@ -1,26 +1,34 @@
-# Confidential Transfers Workshop — Presenter's Guide
+# Confidential Transfers Workshop
 
-A ~1 hour workshop for Solana developers: what Token-2022 Confidential Transfers are, how they work, and how to build with them — demonstrated live on devnet with five short scripts.
+A hands-on introduction for Solana developers: what Token-2022 Confidential Transfers are, how they work, and how to build with them. You'll use the deployed explorer app on devnet, then look under the hood at each action with a step-by-step guide and a minimal, runnable script.
 
-**Primary walkthrough material:** each script has a matching markdown guide in [`apps/web/scripts/workshop/`](apps/web/scripts/workshop/README.md) with slide images, mermaid diagrams of the mechanics, the key code excerpt, real protocol (Rust) internals with source links, and an FAQ of likely audience questions. Put the guide on screen, run the script in a terminal next to it.
+**How the material fits together:** the [deployed app](https://confidential-transfers-explorer-web.vercel.app) is the production experience — connect a wallet, get tokens from the faucet, configure a confidential account, deposit, send, decrypt. Each of those actions has a matching guide in [`workshop/`](workshop/README.md) explaining what happens under the hood, with diagrams, the key code excerpt, and real protocol (Rust) internals with source links. Each guide is paired with a standalone script that does exactly what the app does — stripped down to the essentials — which you can run yourself against devnet.
 
 ## Links
 
 - Deployed explorer app: https://confidential-transfers-explorer-web.vercel.app
+- App source code: https://github.com/catmcgee/confidential-transfers-explorer — the confidential-transfer logic lives in [`apps/web/src/lib/confidentialTransfer.ts`](https://github.com/catmcgee/confidential-transfers-explorer/blob/main/apps/web/src/lib/confidentialTransfer.ts), the UI flows in [`apps/web/src/components/TransferModal.tsx`](https://github.com/catmcgee/confidential-transfers-explorer/blob/main/apps/web/src/components/TransferModal.tsx)
 - Solana Explorer (devnet): https://explorer.solana.com/?cluster=devnet — every script prints per-transaction links
-- Scripts + per-step guides: [`apps/web/scripts/workshop/`](apps/web/scripts/workshop/README.md)
+- Scripts + per-step guides: [`workshop/`](workshop/README.md)
 - Protocol source: [token-2022 confidential transfer extension](https://github.com/solana-program/token-2022/tree/main/program/src/extension/confidential_transfer) · [ZK ElGamal proof program](https://github.com/solana-program/zk-elgamal-proof)
 
-## Suggested flow (60 min)
+## Suggested order
 
-1. **Live demo on the deployed app (10 min).** Open https://confidential-transfers-explorer-web.vercel.app, connect a wallet, show a confidential balance rendering as "encrypted", sign the two derivation messages, watch it decrypt. Sell the punchline before explaining it: *same on-chain bytes, and only the key holder sees a number.*
-2. **The 3-concept primer (10 min)** — below.
-3. **Scripts 01–05 (35 min).** For each step: put the guide `.md` on screen, talk through the diagram, run the script, read the console narration aloud, click one explorer link. Steps 01–02 are quick; budget the most time for 04.
-4. **Q&A (5 min).** Each guide ends with a "what to say if asked" section — skim them beforehand.
+1. **Start in the app.** Open https://confidential-transfers-explorer-web.vercel.app, connect a devnet wallet, and look at a confidential balance rendering as "encrypted". Sign the two derivation messages and watch it decrypt. That's the punchline up front: *same on-chain bytes, and only the key holder sees a number.*
+2. **Read the 3-concept primer** — below. Every step reinforces one of these three ideas.
+3. **Work through steps 01–05.** For each one: do the action in the app, read the matching guide to see what just happened under the hood, then optionally run the script to reproduce it end-to-end on devnet. Steps 01–02 are quick; 04 (the transfer itself) is the deepest.
+
+| Step | In the app | Guide |
+|---|---|---|
+| 01 | The mint behind the faucet (created once by the operator) | [Create the mint](workshop/01-create-mint.md) |
+| 02 | The **Configure Confidential** button and its two signature prompts | [Configure an account](workshop/02-configure-account.md) |
+| 03 | The **Deposit** and **Apply Pending** buttons | [Deposit & apply](workshop/03-deposit-and-apply.md) |
+| 04 | The **Send** flow with its multi-transaction progress bar | [The confidential transfer](workshop/04-confidential-transfer.md) |
+| 05 | The **Click to decrypt** balances (and what everyone else sees) | [Decrypt](workshop/05-decrypt.md) |
 
 ## The 3-concept primer
 
-Cover these three ideas up front; every step then reinforces one of them.
+Three ideas carry the whole system; everything else is plumbing.
 
 **1. Three balances.** A confidential account holds a normal *public* balance, plus two encrypted ones: *pending* (where incoming credits land — anyone can add to it homomorphically) and *available* (what you can spend — only the owner can rewrite it, by "applying" pending). Pending exists because spending requires proofs over your balance ciphertext, so that ciphertext must not change under your feet while others credit you.
 
@@ -28,80 +36,78 @@ Cover these three ideas up front; every step then reinforces one of them.
 
 **3. Why 5 transactions.** A transfer needs three ZK proofs (equality, ciphertext validity, range). A Solana transaction caps at 1232 bytes; the range proof alone is ~1.5 KB. So each proof is verified into a temporary *context-state* scratch account first, the transfer instruction references all three, and they're closed with rent refunded — all in about five transactions.
 
-## Pre-workshop checklist
+## Running the scripts yourself
 
-- [ ] `FAUCET_PRIVATE_KEY` set in `apps/web/.env` and funded with **≥ 0.5 devnet SOL** (https://faucet.solana.com). Everything runs off this one payer.
-- [ ] `SOLANA_RPC_URL` set in `apps/web/.env` to a reliable devnet RPC (a dedicated provider beats the public endpoint; the scripts fall back to `https://api.devnet.solana.com`).
+The app is enough to follow the whole workshop, but the scripts let you reproduce every action locally with nothing hidden. Setup:
+
 - [ ] **Node 22+** installed (`node --version`) — the scripts run under Node via `npx tsx`, *not* bun (the ZK SDK's WASM ESM modules don't load under bun).
-- [ ] Dependencies already installed at the repo root.
-- [ ] Dry-run all five steps the day before (total ≈ 3–4 min of chain time):
+- [ ] Dependencies installed at the repo root.
+- [ ] `FAUCET_PRIVATE_KEY` set in `apps/web/.env` and funded with **≥ 0.5 devnet SOL** (https://faucet.solana.com). Everything runs off this one payer. (Without it, the scripts fall back to requesting an airdrop, which is heavily rate-limited.)
+- [ ] `SOLANA_RPC_URL` set in `apps/web/.env` to a reliable devnet RPC (a dedicated provider beats the public endpoint; the scripts fall back to `https://api.devnet.solana.com`).
+
+Then run the five steps in order (total ≈ 3–4 min of chain time):
 
 ```bash
-NODE_OPTIONS=--experimental-wasm-modules npx tsx apps/web/scripts/workshop/01-create-mint.ts
-NODE_OPTIONS=--experimental-wasm-modules npx tsx apps/web/scripts/workshop/02-configure-account.ts
-NODE_OPTIONS=--experimental-wasm-modules npx tsx apps/web/scripts/workshop/03-deposit-and-apply.ts
-NODE_OPTIONS=--experimental-wasm-modules npx tsx apps/web/scripts/workshop/04-confidential-transfer.ts
-NODE_OPTIONS=--experimental-wasm-modules npx tsx apps/web/scripts/workshop/05-decrypt.ts
+NODE_OPTIONS=--experimental-wasm-modules npx tsx workshop/01-create-mint.ts
+NODE_OPTIONS=--experimental-wasm-modules npx tsx workshop/02-configure-account.ts
+NODE_OPTIONS=--experimental-wasm-modules npx tsx workshop/03-deposit-and-apply.ts
+NODE_OPTIONS=--experimental-wasm-modules npx tsx workshop/04-confidential-transfer.ts
+NODE_OPTIONS=--experimental-wasm-modules npx tsx workshop/05-decrypt.ts
 ```
 
-- [ ] **Time-constrained?** Run 01 + 02 in advance and start the live session at 03 — `state.json` persists the mint and the Alice/Bob wallets, so 03–05 pick up seamlessly. (Delete `state.json` to reset to a fresh mint.)
+Steps share progress through `workshop/state.json` — the mint address and the Alice/Bob test wallets persist between runs, so you can stop and resume anywhere. Delete `state.json` to reset to a fresh mint.
 
-## Per-step run sheet
+## The steps at a glance
 
-Full talk tracks live in each step's guide; this is the condensed version.
+Full explanations live in each step's guide; this is the condensed version.
 
-### 01 — Create the mint · [guide](apps/web/scripts/workshop/01-create-mint.md)
+### 01 — Create the mint · [guide](workshop/01-create-mint.md)
 
 ```bash
-NODE_OPTIONS=--experimental-wasm-modules npx tsx apps/web/scripts/workshop/01-create-mint.ts
+NODE_OPTIONS=--experimental-wasm-modules npx tsx workshop/01-create-mint.ts
 ```
 
-**Say:** confidential transfers are just a Token-2022 *extension* — the mint opts in at creation. Point at the three config fields, especially the auditor: set it and one designated party can decrypt every amount — compliance without a public ledger.
-**Point at:** the mint on the explorer — `ConfidentialTransferMint` next to ordinary mint data.
+Confidential transfers are just a Token-2022 *extension* — the mint opts in at creation. Three config fields matter, especially the auditor: set it and one designated party can decrypt every amount — compliance without a public ledger. In the deployed app, this mint already exists: it's the token the faucet hands out. On the explorer you can see `ConfidentialTransferMint` sitting next to ordinary mint data.
 
-### 02 — Configure Alice & Bob · [guide](apps/web/scripts/workshop/02-configure-account.md)
+### 02 — Configure an account · [guide](workshop/02-configure-account.md)
 
 ```bash
-NODE_OPTIONS=--experimental-wasm-modules npx tsx apps/web/scripts/workshop/02-configure-account.ts
+NODE_OPTIONS=--experimental-wasm-modules npx tsx workshop/02-configure-account.ts
 ```
 
-**Say:** keys are *derived, not stored* — read the printed message strings aloud; that's literally what Phantom signs in the web app. Configuring publishes the ElGamal pubkey on-chain, which is why recipients must configure before they can receive.
-**Point at:** the printed signed-message text; a token account's `ConfidentialTransferAccount` extension on the explorer.
+Keys are *derived, not stored* — the script prints the exact message strings that Phantom asks you to sign when you click **Configure Confidential** in the app. Configuring publishes the ElGamal pubkey on-chain, which is why recipients must configure before they can receive.
 
-### 03 — Deposit & apply · [guide](apps/web/scripts/workshop/03-deposit-and-apply.md)
+### 03 — Deposit & apply · [guide](workshop/03-deposit-and-apply.md)
 
 ```bash
-NODE_OPTIONS=--experimental-wasm-modules npx tsx apps/web/scripts/workshop/03-deposit-and-apply.ts
+NODE_OPTIONS=--experimental-wasm-modules npx tsx workshop/03-deposit-and-apply.ts
 ```
 
-**Say:** three balances — watch value flow public → pending → available. Pending exists because only the owner can re-encrypt their own running balance. Be honest: the *deposit* amount is public; privacy starts inside.
-**Point at:** the three-balance printout after each stage (1000/0/0 → 500/500/0 → 500/0/500).
+Three balances — value flows public → pending → available, matching the app's **Deposit** and **Apply Pending** buttons. Pending exists because only the owner can re-encrypt their own running balance. One honest caveat: the *deposit* amount is public; privacy starts inside. Watch the three-balance printout after each stage (1000/0/0 → 500/500/0 → 500/0/500).
 
-### 04 — The confidential transfer · [guide](apps/web/scripts/workshop/04-confidential-transfer.md)
+### 04 — The confidential transfer · [guide](workshop/04-confidential-transfer.md)
 
 ```bash
-NODE_OPTIONS=--experimental-wasm-modules npx tsx apps/web/scripts/workshop/04-confidential-transfer.ts
+NODE_OPTIONS=--experimental-wasm-modules npx tsx workshop/04-confidential-transfer.ts
 ```
 
-**Say:** three proofs (equality: no minting from thin air; validity: same amount encrypted to sender/receiver/auditor; range: no negative amounts). Five transactions because of the 1232-byte limit; context-state accounts are refunded scratch space. Every transaction prints labeled — read the labels aloud.
-**Point at:** the final transfer transaction on the explorer — *no amount anywhere*.
+Three proofs (equality: no minting from thin air; validity: same amount encrypted to sender/receiver/auditor; range: no negative amounts). Five transactions because of the 1232-byte limit; context-state accounts are refunded scratch space. This is what the app's **Send** progress bar is counting. The final transfer transaction on the explorer contains *no amount anywhere*.
 
-### 05 — Bob decrypts · [guide](apps/web/scripts/workshop/05-decrypt.md)
+### 05 — Decrypt · [guide](workshop/05-decrypt.md)
 
 ```bash
-NODE_OPTIONS=--experimental-wasm-modules npx tsx apps/web/scripts/workshop/05-decrypt.ts
+NODE_OPTIONS=--experimental-wasm-modules npx tsx workshop/05-decrypt.ts
 ```
 
-**Say:** the raw base64 block is what *everyone* — explorer, RPC, validators — sees. Bob re-signs the same messages, decrypts pending (slow ElGamal, hence the lo/hi split), applies, and reads his total instantly via AES. Two decryption paths, each existing for a reason.
-**Point at:** the outsider-view ciphertext block, then the decrypted amounts right under it. Close the loop with the deployed app showing "encrypted" for the same account.
+The raw base64 block the script prints is what *everyone* — explorer, RPC, validators — sees. The recipient re-signs the same messages, decrypts pending (slow ElGamal, hence the lo/hi split), applies, and reads the total instantly via AES. Two decryption paths, each existing for a reason. This is the app's **Click to decrypt** button end-to-end.
 
 ## Troubleshooting
 
 | Symptom | Fix |
 |---|---|
-| `WebAssembly module is included in initial chunk` / import errors on `@solana/zk-sdk` | You forgot the flag or used bun. Must be `NODE_OPTIONS=--experimental-wasm-modules npx tsx ...` under Node 22+. (The `ExperimentalWarning` about WASM modules is normal — ignore it.) |
+| `WebAssembly module is included in initial chunk` / import errors on `@solana/zk-sdk` | The flag is missing or you used bun. Must be `NODE_OPTIONS=--experimental-wasm-modules npx tsx ...` under Node 22+. (The `ExperimentalWarning` about WASM modules is normal — ignore it.) |
 | `429 Too Many Requests` / timeouts mid-step | Public devnet RPC rate limit. Set `SOLANA_RPC_URL` in `apps/web/.env` to a dedicated provider (Helius/Triton/QuickNode free tiers are fine). The scripts already pace themselves and poll via HTTP. |
-| Airdrop fails repeatedly | Devnet faucet is heavily rate-limited. Fund the payer manually at https://faucet.solana.com and put its key in `FAUCET_PRIVATE_KEY` — don't rely on airdrops during a live session. |
-| `state.json is missing "mint" — run 01-create-mint.ts first` | Steps run in order and share `apps/web/scripts/workshop/state.json`. Run the named step, or delete `state.json` and restart from 01. |
-| A transaction fails on-chain in step 04 | Usually a stale account snapshot (e.g. you edited balances between fetch and send). Just re-run the step — it re-fetches, re-proves, and uses fresh blockhashes. |
+| Airdrop fails repeatedly | Devnet faucet is heavily rate-limited. Fund the payer manually at https://faucet.solana.com and put its key in `FAUCET_PRIVATE_KEY` — don't rely on airdrops. |
+| `state.json is missing "mint" — run 01-create-mint.ts first` | Steps run in order and share `workshop/state.json`. Run the named step, or delete `state.json` and restart from 01. |
+| A transaction fails on-chain in step 04 | Usually a stale account snapshot (e.g. balances changed between fetch and send). Just re-run the step — it re-fetches, re-proves, and uses fresh blockhashes. |
 | Payer balance drained | Each full run costs a few hundredths of a SOL (context-account rent is refunded). Top up at the faucet. |

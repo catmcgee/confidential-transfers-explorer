@@ -24,7 +24,7 @@
  *   tokens are inside the encrypted balances.
  *
  * RUN
- *   NODE_OPTIONS=--experimental-wasm-modules npx tsx apps/web/scripts/workshop/03-deposit-and-apply.ts
+ *   NODE_OPTIONS=--experimental-wasm-modules npx tsx workshop/03-deposit-and-apply.ts
  */
 import { address } from '@solana/kit';
 import { fetchToken, getConfidentialDepositInstruction, getMintToInstruction } from '@solana-program/token-2022';

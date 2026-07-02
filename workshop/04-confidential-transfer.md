@@ -1,8 +1,12 @@
 # Step 04 — The Confidential Transfer
 
-## What happens in this step
+## In the app
 
-Alice sends Bob 123 tokens and nobody watching the chain can tell how much. Her machine encrypts the amount three ways, computes her own new balance, and generates three zero-knowledge proofs *locally* — the chain only verifies. Because the proofs are far bigger than a Solana transaction, the transfer spans **five transactions**: three proofs get verified into temporary "context-state" scratch accounts, the actual transfer instruction points at them, and then the scratch accounts are closed with their rent refunded. This is the centerpiece of the workshop — read each transaction's label aloud as the script prints it.
+When you click **Send** in the [deployed app](https://confidential-transfers-explorer-web.vercel.app), a progress bar counts through several transactions — "generating ZK proofs", then "X of ~Y transactions confirmed". This step explains why one transfer takes that many transactions, and what each one does. The production implementation is `createTransferPlan` and `executeInstructionPlan` in [`apps/web/src/lib/confidentialTransfer.ts`](https://github.com/catmcgee/confidential-transfers-explorer/blob/main/apps/web/src/lib/confidentialTransfer.ts), driven from the send flow in [`apps/web/src/components/TransferModal.tsx`](https://github.com/catmcgee/confidential-transfers-explorer/blob/main/apps/web/src/components/TransferModal.tsx).
+
+## What happens under the hood
+
+In the script below, Alice sends Bob 123 tokens and nobody watching the chain can tell how much. Her machine encrypts the amount three ways, computes her own new balance, and generates three zero-knowledge proofs *locally* — the chain only verifies. Because the proofs are far bigger than a Solana transaction, the transfer spans **five transactions**: three proofs get verified into temporary "context-state" scratch accounts, the actual transfer instruction points at them, and then the scratch accounts are closed with their rent refunded. This is the centerpiece of the workshop — the script labels each transaction as it lands, so you can follow along.
 
 ![Sender → ZK proof program + Token-2022 → recipient](assets/architecture-overview.png)
 
@@ -10,7 +14,7 @@ Alice sends Bob 123 tokens and nobody watching the chain can tell how much. Her 
 
 ![One amount, encrypted to sender, receiver, and auditor keys](assets/three-key-encryption.png)
 
-A single *grouped* ciphertext encrypts the same amount under three keys: the **sender's** (so Alice can still reckon her own balance), the **receiver's** (so Bob can decrypt what he got), and the **auditor's** (or a placeholder key if, as in our mint, there is no auditor). One of the three proofs exists precisely to show all three encryptions really contain the same number.
+A single *grouped* ciphertext encrypts the same amount under three keys: the **sender's** (so Alice can still reckon her own balance), the **receiver's** (so Bob can decrypt what he got), and the **auditor's** (or a placeholder key if, as in this workshop's mint, there is no auditor). One of the three proofs exists precisely to show all three encryptions really contain the same number.
 
 But first — how does Alice even find Bob's encryption key? She reads it off his token account:
 
@@ -24,7 +28,7 @@ flowchart LR
     style PK fill:#e8d5f9,stroke:#8b5cf6
 ```
 
-No key exchange, no handshake — the pubkey Bob published in step 02 is sitting in public account data. (The script prints it.)
+No key exchange, no handshake — the pubkey Bob published in step 02 is sitting in public account data. (The script prints it. The app does the same lookup when you enter a recipient address — that's its "Configured / Not configured" check.)
 
 ## The three proofs
 
@@ -55,15 +59,17 @@ sequenceDiagram
     Note over T22: homomorphically: source available -= amount,<br/>dest pending += amount
 ```
 
-Context accounts are scratch space, not state: the net cost of a transfer is ~5 transaction fees; the rent comes back in tx 5.
+Context accounts are scratch space, not state: the net cost of a transfer is ~5 transaction fees; the rent comes back in tx 5. This sequence is exactly what the app's progress bar is counting.
 
-One subtlety worth having in your pocket — the proofs are bound to a **snapshot of Alice's balance ciphertext**:
+One subtlety worth knowing — the proofs are bound to a **snapshot of Alice's balance ciphertext**:
 
 ![Why proofs bind to a ciphertext snapshot — the dust/front-running case](assets/proof-ciphertext-race.png)
 
 If Alice's available-balance ciphertext changes between proof generation and the transfer (say someone deposits dust to her and she applies it, or an attacker tries to replay her proof against different state), the equality proof no longer matches and the transfer fails. Proofs can't be replayed or reused against mutated state.
 
 ## The key code (from `04-confidential-transfer.ts`)
+
+The code below is a minimal standalone version of exactly what the app's **Send** flow does — you can run it against devnet:
 
 ```ts
 const plan = await getConfidentialTransferInstructionPlan({
@@ -85,7 +91,7 @@ await executePlan(tools, plan);   // ~5 transactions, each labeled as it lands
 Run it (amount in tokens optional, default 123):
 
 ```bash
-NODE_OPTIONS=--experimental-wasm-modules npx tsx apps/web/scripts/workshop/04-confidential-transfer.ts
+NODE_OPTIONS=--experimental-wasm-modules npx tsx workshop/04-confidential-transfer.ts
 ```
 
 Open the **last** transaction in the explorer: no amount anywhere in the instruction data. Compare with any normal SPL transfer where the amount sits in plaintext.
@@ -139,16 +145,16 @@ pub enum ProofInstruction {
 }
 ```
 
-## What to say if asked
+## FAQ
 
-**"Why not one transaction?"**
+**Why not one transaction?**
 The 1232-byte transaction limit versus a ~1.5 KB range proof (plus two more proofs and the transfer itself). Context-state accounts let each proof be verified in its own transaction, then referenced cheaply.
 
-**"What stops someone replaying a proof, or frontrunning the transfer?"**
+**What stops someone replaying a proof, or frontrunning the transfer?**
 Proofs are cryptographically bound to the exact source-balance ciphertext they were generated against (see the race image above). Any change to that ciphertext — including attacker-injected dust that gets applied — invalidates the equality proof and the transfer fails closed.
 
-**"Who pays for all this, and what does it cost?"**
+**Who pays for all this, and what does it cost?**
 Whoever signs as fee payer — here, one payer covers all five transactions and gets the context-account rent refunded in the final one. Net cost ≈ 5 transaction fees plus the (heavier) compute for on-chain proof verification.
 
-**"Can validators or RPCs see the amount while it's in flight?"**
+**Can validators or RPCs see the amount while it's in flight?**
 No — the amount never exists in plaintext anywhere in the transaction. Only ciphertexts and proofs travel; the sender's machine is the only place the number ever appears.
