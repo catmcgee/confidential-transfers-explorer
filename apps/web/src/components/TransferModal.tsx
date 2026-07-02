@@ -224,7 +224,7 @@ export function TransferModal({ isOpen, onClose, onTransferComplete }: TransferM
         jsonrpc: '2.0',
         id: 1,
         method: 'getAccountInfo',
-        params: [tokenAccountAddress, { encoding: 'jsonParsed' }]
+        params: [tokenAccountAddress, { encoding: 'jsonParsed', commitment: 'confirmed' }]
       })
     });
     const accountData = await accountResponse.json();
@@ -286,6 +286,19 @@ export function TransferModal({ isOpen, onClose, onTransferComplete }: TransferM
     }
   };
 
+  // Re-decrypt balances after an operation using already-cached keys.
+  // Skips silently when keys aren't cached yet so it never triggers a
+  // surprise wallet signature prompt.
+  const refreshDecryptedBalances = async (mint: string) => {
+    if (!cachedKeys[mint]) return;
+    try {
+      await handleDecryptPending();
+      await handleDecryptConfidential();
+    } catch (err) {
+      console.warn('Balance re-decryption failed:', err);
+    }
+  };
+
   // Handle deposit (public → pending)
   const handleDeposit = async () => {
     if (!selectedToken || !publicKey || !depositAmount) return;
@@ -335,6 +348,7 @@ export function TransferModal({ isOpen, onClose, onTransferComplete }: TransferM
       } catch (refreshErr) {
         console.warn('Post-deposit token refresh failed (deposit itself succeeded):', refreshErr);
       }
+      await refreshDecryptedBalances(selectedToken.mint);
       setDepositAmount('');
       setOperation(null);
     } catch (err) {
@@ -401,6 +415,7 @@ export function TransferModal({ isOpen, onClose, onTransferComplete }: TransferM
       } catch (refreshErr) {
         console.warn('Post-apply token refresh failed (apply itself succeeded):', refreshErr);
       }
+      if (selectedToken) await refreshDecryptedBalances(selectedToken.mint);
       setOperation(null);
     } catch (err) {
       console.error('Apply pending balance failed:', err);
@@ -427,7 +442,7 @@ export function TransferModal({ isOpen, onClose, onTransferComplete }: TransferM
           jsonrpc: '2.0',
           id: 1,
           method: 'getAccountInfo',
-          params: [inputAddress, { encoding: 'jsonParsed' }]
+          params: [inputAddress, { encoding: 'jsonParsed', commitment: 'confirmed' }]
         })
       });
       const accountData = await accountResponse.json();
@@ -469,7 +484,7 @@ export function TransferModal({ isOpen, onClose, onTransferComplete }: TransferM
             params: [
               inputAddress,
               { programId: TOKEN_2022_PROGRAM_ID },
-              { encoding: 'jsonParsed' }
+              { encoding: 'jsonParsed', commitment: 'confirmed' }
             ]
           })
         });
@@ -637,6 +652,7 @@ export function TransferModal({ isOpen, onClose, onTransferComplete }: TransferM
       } catch (refreshErr) {
         console.warn('Post-transfer token refresh failed (transfer itself succeeded):', refreshErr);
       }
+      if (selectedToken) await refreshDecryptedBalances(selectedToken.mint);
 
     } catch (err) {
       console.error('Confidential transfer failed:', err);
@@ -714,7 +730,7 @@ export function TransferModal({ isOpen, onClose, onTransferComplete }: TransferM
           jsonrpc: '2.0',
           id: 1,
           method: 'getAccountInfo',
-          params: [token.mint, { encoding: 'jsonParsed' }]
+          params: [token.mint, { encoding: 'jsonParsed', commitment: 'confirmed' }]
         })
       });
       const mintData = await mintResponse.json();
@@ -802,7 +818,7 @@ export function TransferModal({ isOpen, onClose, onTransferComplete }: TransferM
             params: [
               String(publicKey),
               { programId: TOKEN_2022_PROGRAM_ID },
-              { encoding: 'jsonParsed' }
+              { encoding: 'jsonParsed', commitment: 'confirmed' }
             ]
           })
         });
