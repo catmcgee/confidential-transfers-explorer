@@ -7,15 +7,7 @@ interface TypeFilterProps {
   isConnected?: boolean;
 }
 
-const FILTER_OPTIONS = [
-  { value: 'all', label: 'All' },
-  { value: 'Transfer', label: 'Transfer' },
-  { value: 'Deposit', label: 'Deposit' },
-  { value: 'Withdraw', label: 'Withdraw' },
-  { value: 'ApplyPendingBalance', label: 'Apply' },
-  { value: 'ConfigureAccount', label: 'Configure' },
-  { value: 'InitializeMint', label: 'Init Mint' },
-];
+const FILTER_OPTIONS = [{ value: 'all', label: 'All' }];
 
 export function TypeFilter({ value, onChange, showMineFilter = true, isConnected = false }: TypeFilterProps) {
   return (
