@@ -1,12 +1,12 @@
-# Step 02 — Owners, Signature-Derived Keys, and Account Configuration
+# Step 04 — Owners, Signature-Derived Keys, and Account Configuration
 
 ## In the app
 
-In the [deployed app](https://confidential-transfers-explorer-web.vercel.app), a token that hasn't opted in shows a **Configure Confidential** button. Click it and your wallet prompts you to sign **two short text messages** before any transaction goes out — those two signatures are where your encryption keys come from. Production code: [`confidentialTransfer.ts`](https://github.com/catmcgee/confidential-transfers-explorer/blob/main/apps/web/src/lib/confidentialTransfer.ts) · [`TransferModal.tsx`](https://github.com/catmcgee/confidential-transfers-explorer/blob/main/apps/web/src/components/TransferModal.tsx).
+You've just watched a transfer **fail** against an unconfigured recipient ([step 03](03-confidential-transfer.md)) — this step is the fix. In the [deployed app](https://confidential-transfers-explorer-web.vercel.app), a token that hasn't opted in shows a **Configure Confidential** button (and an unconfigured recipient address makes **Send** refuse with "recipient has not configured"). Click it and your wallet prompts you to sign **two short text messages** before any transaction goes out — those two signatures are where your encryption keys come from. Production code: [`confidentialTransfer.ts`](https://github.com/catmcgee/confidential-transfers-explorer/blob/main/apps/web/src/lib/confidentialTransfer.ts) · [`TransferModal.tsx`](https://github.com/catmcgee/confidential-transfers-explorer/blob/main/apps/web/src/components/TransferModal.tsx).
 
 ## What happens under the hood
 
-The script gives two fresh test wallets — Alice and Bob — a *confidential-ready* token account each. Each owner signs two readable messages, the signatures become an ElGamal keypair and an AES key, and configuring publishes the ElGamal *public* key on-chain — what senders encrypt to, and why recipients must configure **before** anyone can send to them.
+Alice's and Bob's accounts were already configured "quietly" — Alice's in [step 02](02-deposit-and-apply.md), Bob's in [step 03](03-confidential-transfer.md) right after the failed attempt. This script sends **no new transactions**: it re-derives both owners' keys from scratch and checks them against the chain. Each owner signs two readable messages, the signatures become an ElGamal keypair and an AES key, and configuring published the ElGamal *public* key on-chain — what senders encrypt to. That's why the step 03 transfer to unconfigured Bob had nothing to encrypt to: you watched exactly what happens when a recipient hasn't configured. The side-by-side re-derived vs on-chain pubkeys matching, with no stored secrets and no new transaction, is the proof that keys are a pure function of (wallet, mint).
 
 ## Key derivation: signatures over readable text
 
@@ -34,9 +34,9 @@ flowchart TD
 
 ## Configuration also needs a proof
 
-The chain won't store an ElGamal pubkey unless you prove it's well-formed — a malformed pubkey could make funds sent to you unspendable. This is the **pubkey-validity proof**: a one-time proof that you hold the secret key behind the pubkey you're publishing. (The three heavier proofs — range, equality, validity — are per-*transfer* and come in [step 04](04-confidential-transfer.md).)
+The chain won't store an ElGamal pubkey unless you prove it's well-formed — a malformed pubkey could make funds sent to you unspendable. This is the **pubkey-validity proof**: a one-time proof that you hold the secret key behind the pubkey you're publishing. (The three heavier proofs — range, equality, validity — are per-*transfer*; you already saw them in [step 03](03-confidential-transfer.md).)
 
-The setup transaction bundles: create ATA → reallocate for the extension → configure → **verify pubkey-validity proof**.
+The setup transaction bundles: create ATA → reallocate for the extension → configure → **verify pubkey-validity proof**. That's the transaction you saw fly by in steps 02 and 03.
 
 ## The helpers
 
@@ -102,4 +102,4 @@ You can't — it's re-derived from a wallet signature whenever needed. Losing th
 Per `(owner, mint)` pair here. The protocol also supports a global `ElGamalRegistry` variant (`ConfigureAccountWithRegistry`) — the other match arm in the processor code above.
 
 **Can someone send me confidential tokens before I configure?**
-No — there's no ElGamal pubkey on your account to encrypt to. That's why configuration is the onboarding step for recipients.
+No — there's no ElGamal pubkey on your account to encrypt to. You watched exactly that fail at the start of [step 03](03-confidential-transfer.md); configuration is the onboarding step for recipients.

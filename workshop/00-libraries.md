@@ -1,6 +1,6 @@
 # Step 00 — Token-2022 and the Libraries
 
-Confidential Transfers is not a separate protocol — it's a **token extension** of [Token-2022](https://github.com/solana-program/token-2022), Solana's extended token program. Token-2022 works like the original SPL token program but lets mints and accounts opt into extra behaviors (transfer fees, interest, metadata, ...). Confidential Transfers is one of those extensions: the **mint** opts in when it's created (step 01), and each **token account** opts in by configuring itself with an encryption key (step 02). Everything else — deposits, encrypted transfers, decryption — builds on that.
+Confidential Transfers is not a separate protocol — it's a **token extension** of [Token-2022](https://github.com/solana-program/token-2022), Solana's extended token program. Token-2022 works like the original SPL token program but lets mints and accounts opt into extra behaviors (transfer fees, interest, metadata, ...). Confidential Transfers is one of those extensions: the **mint** opts in when it's created (step 01), and each **token account** opts in by configuring itself with an encryption key (step 04 — you'll first watch a transfer to an *unconfigured* account fail in step 03). Everything else — deposits, encrypted transfers, decryption — builds on that.
 
 Two on-chain programs are involved: **Token-2022** (holds the balances, executes the instructions) and the **ZK ElGamal Proof program** (verifies the zero-knowledge proofs transfers rely on).
 

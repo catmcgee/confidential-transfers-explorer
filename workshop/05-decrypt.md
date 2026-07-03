@@ -2,7 +2,7 @@
 
 ## In the app
 
-Confidential balances in the [deployed app](https://confidential-transfers-explorer-web.vercel.app) show as **Click to decrypt**. Click, sign the two derivation messages from step 02, and the ciphertext resolves to a number — for you, and only you; everyone else keeps seeing opaque bytes. Production code: [`confidentialTransfer.ts`](https://github.com/catmcgee/confidential-transfers-explorer/blob/main/apps/web/src/lib/confidentialTransfer.ts) · [`TransferModal.tsx`](https://github.com/catmcgee/confidential-transfers-explorer/blob/main/apps/web/src/components/TransferModal.tsx).
+Confidential balances in the [deployed app](https://confidential-transfers-explorer-web.vercel.app) show as **Click to decrypt**. Click, sign the two derivation messages from step 04, and the ciphertext resolves to a number — for you, and only you; everyone else keeps seeing opaque bytes. Production code: [`confidentialTransfer.ts`](https://github.com/catmcgee/confidential-transfers-explorer/blob/main/apps/web/src/lib/confidentialTransfer.ts) · [`TransferModal.tsx`](https://github.com/catmcgee/confidential-transfers-explorer/blob/main/apps/web/src/components/TransferModal.tsx).
 
 ## What happens under the hood
 
@@ -55,7 +55,7 @@ There is **no high-level helper** for this step — decryption is the one place 
   const available = aesKey.decrypt(AeCiphertext.fromBytes(ct.decryptableAvailableBalance));
   ```
 
-(The apply in the middle of the script reuses step 03's `getApplyConfidentialPendingBalanceInstructionFromToken`.)
+(The apply in the middle of the script reuses step 02's `getApplyConfidentialPendingBalanceInstructionFromToken`.)
 
 The "outsider" block (ciphertext) versus the decrypted numbers below it is the app's "encrypted" badge versus the unlocked balance.
 
@@ -84,11 +84,11 @@ pub struct ConfidentialTransferAccount {
 }
 ```
 
-Bob's apply is pure ciphertext arithmetic — the chain moves his money without ever learning the amount: `process_apply_pending_balance` in [processor.rs](https://github.com/solana-program/token-2022/blob/main/program/src/extension/confidential_transfer/processor.rs) (walked through in step 03).
+Bob's apply is pure ciphertext arithmetic — the chain moves his money without ever learning the amount: `process_apply_pending_balance` in [processor.rs](https://github.com/solana-program/token-2022/blob/main/program/src/extension/confidential_transfer/processor.rs) (walked through in step 02).
 
 ## The public boundary
 
-Everything inside the confidential world stays encrypted — but the **crossings are public**. `Deposit` (step 03) and `Withdraw` both carry their amount as a plaintext instruction argument, so exiting reveals exactly what you exit with:
+Everything inside the confidential world stays encrypted — but the **crossings are public**. `Deposit` (step 02) and `Withdraw` both carry their amount as a plaintext instruction argument, so exiting reveals exactly what you exit with:
 
 ```mermaid
 %%{init: {'theme':'base','themeVariables':{'background':'transparent','primaryColor':'#16161f','primaryTextColor':'#ffffff','primaryBorderColor':'#9945FF','secondaryColor':'#0f2e21','secondaryTextColor':'#ffffff','secondaryBorderColor':'#14F195','tertiaryColor':'#241b38','tertiaryTextColor':'#ffffff','lineColor':'#8b8ba7','textColor':'#e6e6f0','fontSize':'14px','clusterBkg':'#101018','clusterBorder':'#3a3a4d','edgeLabelBackground':'#101018','actorBkg':'#16161f','actorTextColor':'#ffffff','actorBorder':'#9945FF','signalColor':'#e6e6f0','signalTextColor':'#e6e6f0','noteBkgColor':'#241b38','noteTextColor':'#e6e6f0','noteBorderColor':'#9945FF','labelBoxBkgColor':'#16161f','labelTextColor':'#ffffff','loopTextColor':'#e6e6f0'}}}%%

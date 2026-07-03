@@ -1,4 +1,4 @@
-# Step 04 — The Confidential Transfer
+# Step 03 — The Confidential Transfer
 
 ## In the app
 
@@ -9,6 +9,12 @@ When you click **Send** in the [deployed app](https://confidential-transfers-exp
 Alice sends Bob 123 tokens and nobody watching the chain can tell how much. Her machine encrypts the amount and generates three ZK proofs *locally*; the chain only verifies. The proofs outsize a Solana transaction, so the transfer spans **five transactions** — the script labels each one as it lands.
 
 ![Sender → ZK proof program + Token-2022 → recipient](assets/architecture-overview.png)
+
+## Sending to someone who never configured
+
+Before the real transfer, the script does the naive thing on purpose: Bob is brand new — he has a plain token account but never opted in to confidential transfers — and Alice tries to send to him anyway. **It fails before a single transaction is built.** A confidential transfer encrypts the amount to the recipient's ElGamal public key, read straight off the recipient's token account — and Bob's account has no `elgamalPubkey`, so there is *nothing to encrypt to*. The plan builder throws (`Token account is missing the ConfidentialTransferAccount extension.`), which is exactly the app's "recipient has not configured" error when you type an unconfigured address into **Send**.
+
+The fix is a one-time account configuration — the script does it in one quiet line and retries, and [step 04](04-configure-account.md) unpacks exactly what that configuration is (where the keys come from, what goes on-chain, and the ZK proof it needs).
 
 ## The amount is encrypted three ways
 

@@ -57,7 +57,7 @@ async function main() {
   console.log('STEP 05 — Bob decrypts his balances (devnet)\n');
 
   const mint = address(requireState('mint', '01-create-mint.ts'));
-  const bob = requireState('bob', '02-configure-account.ts');
+  const bob = requireState('bob', '03-confidential-transfer.ts');
   const payer = await loadPayer();
   const tools = createTools(payer);
 
@@ -73,13 +73,13 @@ async function main() {
   // --- What BOB sees: re-derive his keys by signing the same text ----------
   const bobSigner = await signerFromPrivateKeyString(bob.secretBase58);
   const keys = await deriveCtKeys(bobSigner, mint);
-  console.log('Bob re-derives his keys (same signed messages as step 02) and decrypts:');
+  console.log('Bob re-derives his keys (same signed messages as step 04) and decrypts:');
 
   // Pending: ElGamal lo/hi. This is the slow discrete-log path — the reason
   // the protocol splits pending into 16-bit chunks in the first place.
   const received = decryptPending(ct, keys.elgamalSecretKey);
   console.log(`\n  Bob's PENDING balance decrypts to: ${ui(received)} tokens`);
-  console.log('  (that is what Alice sent in step 04 — nobody else can compute this)');
+  console.log('  (that is what Alice sent in step 03 — nobody else can compute this)');
 
   // --- Apply pending so the credit becomes spendable ------------------------
   console.log('\nApplying the pending balance (pending -> available):');

@@ -1,4 +1,4 @@
-# Step 03 — Deposit and Apply: the Three Balances
+# Step 02 — Deposit and Apply: the Three Balances
 
 ## In the app
 
@@ -7,6 +7,8 @@ Once a token is configured, the [deployed app](https://confidential-transfers-ex
 ## What happens under the hood
 
 The script mints 1000 public tokens to Alice, `Deposit`s 500 into her *pending* balance, then folds pending into spendable *available* with `ApplyPendingBalance`. Value flows public → pending → available — and note the deposit **amount is public**; privacy starts once tokens are inside.
+
+(The script first sets up Alice's confidential token account quietly — an account has to be configured with an encryption key before it can hold encrypted balances. What that configuration actually does is [step 04](04-configure-account.md)'s deep-dive.)
 
 ![Pending vs available, and ApplyPendingBalance between them](assets/pending-vs-available.png)
 

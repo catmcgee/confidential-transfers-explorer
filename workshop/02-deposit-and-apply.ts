@@ -1,5 +1,5 @@
 /**
- * STEP 03 — Mint public tokens to Alice, deposit into her confidential
+ * STEP 02 — Mint public tokens to Alice, deposit into her confidential
  *           balance, and apply the pending balance.
  *
  * WHAT THIS TEACHES
@@ -17,6 +17,10 @@
  *   them into available — decrypting the pending amount locally and writing
  *   a fresh AES-encrypted "decryptable available balance" only they can read.
  *
+ *   (The script quietly sets up Alice's confidential token account first —
+ *   an account must be configured with an encryption key before it can hold
+ *   encrypted balances. How that works is step 04's deep-dive.)
+ *
  * WHAT TO POINT AT
  *   The three balance lines printed after each stage: watch value move
  *   public -> pending -> available. On the explorer, the deposit amount is
@@ -24,11 +28,21 @@
  *   tokens are inside the encrypted balances.
  *
  * RUN
- *   NODE_OPTIONS=--experimental-wasm-modules npx tsx workshop/03-deposit-and-apply.ts
+ *   NODE_OPTIONS=--experimental-wasm-modules npx tsx workshop/02-deposit-and-apply.ts
  */
 import { address } from '@solana/kit';
-import { fetchToken, getConfidentialDepositInstruction, getMintToInstruction } from '@solana-program/token-2022';
-import { getApplyConfidentialPendingBalanceInstructionFromToken } from '@solana-program/token-2022/confidential';
+import {
+  TOKEN_2022_PROGRAM_ADDRESS,
+  fetchToken,
+  findAssociatedTokenPda,
+  getConfidentialDepositInstruction,
+  getMintToInstruction,
+} from '@solana-program/token-2022';
+import {
+  getApplyConfidentialPendingBalanceInstructionFromToken,
+  getCreateConfidentialTransferAccountInstructionPlan,
+} from '@solana-program/token-2022/confidential';
+import { getTransferSolInstruction } from '@solana-program/system';
 
 import {
   type CtKeys,
@@ -39,14 +53,17 @@ import {
   decryptAvailable,
   decryptPending,
   executeInstructions,
+  executePlan,
   getCtExtension,
   loadPayer,
+  newOwner,
   requireState,
   rpc,
-  signerFromPrivateKeyString,
   ui,
+  writeState,
 } from './helpers.ts';
 
+const SOL_FOR_FEES = 20_000_000n; // 0.02 SOL, so Alice could pay her own fees later
 const MINT_AMOUNT = RAW(1000);
 const DEPOSIT_AMOUNT = RAW(500);
 
@@ -60,22 +77,47 @@ async function printBalances(tokenAccount: string, keys: CtKeys, label: string) 
 }
 
 async function main() {
-  console.log('STEP 03 — deposit into the confidential balance and apply pending (devnet)\n');
+  console.log('STEP 02 — deposit into the confidential balance and apply pending (devnet)\n');
 
   const mint = address(requireState('mint', '01-create-mint.ts'));
-  const alice = requireState('alice', '02-configure-account.ts');
   const payer = await loadPayer();
   const tools = createTools(payer);
+  console.log(`Mint: ${mint}\n`);
 
-  const aliceSigner = await signerFromPrivateKeyString(alice.secretBase58);
-  const keys = await deriveCtKeys(aliceSigner, mint); // same signatures -> same keys as step 02
+  // --- 0. Setup: a fresh wallet for Alice, funded and configured -----------
+  // A token account must be configured with an encryption key before it can
+  // hold encrypted balances — we do that quietly here and unpack it in 04.
+  // Alice's 32-byte seed goes into state.json so later steps can sign as her.
+  const alice = await newOwner();
+  console.log(`Alice: ${alice.signer.address}`);
+  console.log("Setting up Alice's confidential account (how configuration works is step 04):");
+  await executeInstructions(tools, [
+    getTransferSolInstruction({ source: payer, destination: alice.signer.address, amount: SOL_FOR_FEES }),
+  ]);
+  const keys = await deriveCtKeys(alice.signer, mint);
+  await executePlan(
+    tools,
+    await getCreateConfidentialTransferAccountInstructionPlan({
+      payer,
+      owner: alice.signer,
+      mint,
+      rpc,
+      elgamalKeypair: keys.elgamalKeypair,
+      aesKey: keys.aesKey,
+    }),
+  );
+  const [aliceAta] = await findAssociatedTokenPda({
+    mint,
+    owner: alice.signer.address,
+    tokenProgram: TOKEN_2022_PROGRAM_ADDRESS,
+  });
 
   // --- 1. Mint PUBLIC tokens to Alice (plain Token-2022, fully visible) ----
-  console.log(`Minting ${ui(MINT_AMOUNT)} public tokens to Alice:`);
+  console.log(`\nMinting ${ui(MINT_AMOUNT)} public tokens to Alice:`);
   await executeInstructions(tools, [
-    getMintToInstruction({ mint, token: address(alice.tokenAccount), mintAuthority: payer, amount: MINT_AMOUNT }),
+    getMintToInstruction({ mint, token: aliceAta, mintAuthority: payer, amount: MINT_AMOUNT }),
   ]);
-  await printBalances(alice.tokenAccount, keys, 'after mint');
+  await printBalances(aliceAta, keys, 'after mint');
 
   // --- 2. Deposit: public -> encrypted PENDING ------------------------------
   // The amount here is a PUBLIC instruction argument — anyone can see 500
@@ -83,36 +125,40 @@ async function main() {
   console.log(`\nDepositing ${ui(DEPOSIT_AMOUNT)} into Alice's confidential PENDING balance:`);
   await executeInstructions(tools, [
     getConfidentialDepositInstruction({
-      token: address(alice.tokenAccount),
+      token: aliceAta,
       mint,
-      authority: aliceSigner,
+      authority: alice.signer,
       amount: DEPOSIT_AMOUNT,
       decimals: DECIMALS,
     }),
   ]);
-  await printBalances(alice.tokenAccount, keys, 'after deposit');
+  await printBalances(aliceAta, keys, 'after deposit');
 
   // --- 3. Apply: PENDING -> AVAILABLE ---------------------------------------
   // Only Alice can do this: she decrypts her pending credits locally and
   // re-encrypts her new available balance under her own AES key.
   console.log('\nApplying the pending balance (Alice folds credits into her spendable balance):');
-  const token = await fetchToken(rpc, address(alice.tokenAccount), { commitment: 'confirmed' });
+  const token = await fetchToken(rpc, aliceAta, { commitment: 'confirmed' });
   await executeInstructions(tools, [
     getApplyConfidentialPendingBalanceInstructionFromToken({
-      token: address(alice.tokenAccount),
+      token: aliceAta,
       tokenAccount: token.data,
-      authority: aliceSigner,
+      authority: alice.signer,
       elgamalSecretKey: keys.elgamalSecretKey,
       aesKey: keys.aesKey,
     }),
   ]);
-  await printBalances(alice.tokenAccount, keys, 'after apply');
+  await printBalances(aliceAta, keys, 'after apply');
 
   console.log(`\nDone. Alice now has ${ui(DEPOSIT_AMOUNT)} SPENDABLE confidential tokens,`);
-  console.log('and the remainder is still public. Step 04 sends some of it to Bob — secretly.');
+  console.log('and the remainder is still public. Step 03 sends some of it to Bob — secretly.');
+
+  writeState({
+    alice: { name: 'Alice', address: alice.signer.address, secretBase58: alice.secretBase58, tokenAccount: aliceAta },
+  });
 }
 
 main().catch(err => {
-  console.error('\nSTEP 03 FAILED:', err);
+  console.error('\nSTEP 02 FAILED:', err);
   process.exit(1);
 });
