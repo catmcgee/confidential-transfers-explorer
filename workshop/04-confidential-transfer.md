@@ -132,3 +132,9 @@ One fee payer covers all five transactions and gets the context-account rent ref
 
 **Can validators or RPCs see the amount while it's in flight?**
 No — only ciphertexts and proofs travel; the sender's machine is the only place the plaintext number ever exists.
+
+**What exactly are the five transactions?**
+1) create + verify the **equality proof** into a context account, 2) create + verify the **validity proof**, 3) **create** the range-proof context account, 4) **verify the range proof** (it's too large to share a transaction with its account creation), 5) the **transfer itself** referencing the three verified contexts, plus closing all three (rent refunded).
+
+**Why does the wallet warn on some of these transactions but not others?**
+Wallets simulate each transaction and warn when they can't decode the effect. The proof transactions interact with the ZK ElGamal Proof program — young enough that wallets don't recognize it — and their only visible effect is SOL leaving for rent, so they get the generic caution banner. The final transaction is a Token-2022 instruction wallets do recognize, so it renders normally. The warnings mean "I can't summarize this," not "this is dangerous."

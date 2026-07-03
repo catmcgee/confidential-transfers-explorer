@@ -110,12 +110,12 @@ export default function TxPage({ params }: TxPageProps) {
             <div className="flex items-center gap-2 mb-2">
               <h1 className="text-sm font-medium text-zinc-100">Transaction</h1>
               <a
-                href={`https://solscan.io/tx/${tx.signature}`}
+                href={`https://explorer.solana.com/tx/${tx.signature}?cluster=devnet`}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="text-[10px] text-zinc-600 hover:text-zinc-400 transition-colors"
               >
-                Solscan ↗
+                Solana Explorer ↗
               </a>
             </div>
             <div className="flex items-center gap-2">
@@ -173,7 +173,7 @@ function ActivityDetail({ activity, index }: { activity: CTActivityResponse; ind
                 <span className="text-[10px] text-zinc-600">Owner</span>
                 <div className="flex items-center gap-1.5">
                   <a
-                    href={`https://solscan.io/account/${activity.sourceOwner}`}
+                    href={`https://explorer.solana.com/address/${activity.sourceOwner}?cluster=devnet`}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="font-mono text-xs text-zinc-400 hover:text-zinc-200 break-all transition-colors"
@@ -189,7 +189,7 @@ function ActivityDetail({ activity, index }: { activity: CTActivityResponse; ind
                 <span className="text-[10px] text-zinc-600">Token Account</span>
                 <div className="flex items-center gap-1.5">
                   <a
-                    href={`https://solscan.io/account/${activity.sourceTokenAccount}`}
+                    href={`https://explorer.solana.com/address/${activity.sourceTokenAccount}?cluster=devnet`}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="font-mono text-xs text-zinc-500 hover:text-zinc-300 break-all transition-colors"
@@ -212,7 +212,7 @@ function ActivityDetail({ activity, index }: { activity: CTActivityResponse; ind
                 <span className="text-[10px] text-zinc-600">Owner</span>
                 <div className="flex items-center gap-1.5">
                   <a
-                    href={`https://solscan.io/account/${activity.destOwner}`}
+                    href={`https://explorer.solana.com/address/${activity.destOwner}?cluster=devnet`}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="font-mono text-xs text-zinc-400 hover:text-zinc-200 break-all transition-colors"
@@ -228,7 +228,7 @@ function ActivityDetail({ activity, index }: { activity: CTActivityResponse; ind
                 <span className="text-[10px] text-zinc-600">Token Account</span>
                 <div className="flex items-center gap-1.5">
                   <a
-                    href={`https://solscan.io/account/${activity.destTokenAccount}`}
+                    href={`https://explorer.solana.com/address/${activity.destTokenAccount}?cluster=devnet`}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="font-mono text-xs text-zinc-500 hover:text-zinc-300 break-all transition-colors"
@@ -258,7 +258,7 @@ function ActivityDetail({ activity, index }: { activity: CTActivityResponse; ind
           <div>
             <span className="text-zinc-600">Mint: </span>
             <a
-              href={`https://solscan.io/token/${activity.mint}`}
+              href={`https://explorer.solana.com/address/${activity.mint}?cluster=devnet`}
               target="_blank"
               rel="noopener noreferrer"
               className="font-mono text-zinc-500 hover:text-zinc-300 transition-colors"

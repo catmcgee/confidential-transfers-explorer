@@ -2,7 +2,7 @@
 
 A five-step walkthrough of Solana Token-2022 Confidential Transfers on devnet. Each step matches an action in the [deployed explorer app](https://confidential-transfers-explorer-web.vercel.app): a diagram-first guide of what happens under the hood, paired with a minimal standalone script that does exactly what the app does — runnable against devnet, narrating itself via `console.log`.
 
-The workshop landing page (what you'll learn, the primer, setup, troubleshooting) lives at the repo root: [`WORKSHOP.md`](../WORKSHOP.md). The production implementation of the same flows is in the app source: [`apps/web/src/lib/confidentialTransfer.ts`](https://github.com/catmcgee/confidential-transfers-explorer/blob/main/apps/web/src/lib/confidentialTransfer.ts) and [`apps/web/src/components/TransferModal.tsx`](https://github.com/catmcgee/confidential-transfers-explorer/blob/main/apps/web/src/components/TransferModal.tsx).
+The production implementation of the same flows is in the app source: [`apps/web/src/lib/confidentialTransfer.ts`](https://github.com/catmcgee/confidential-transfers-explorer/blob/main/apps/web/src/lib/confidentialTransfer.ts) and [`apps/web/src/components/TransferModal.tsx`](https://github.com/catmcgee/confidential-transfers-explorer/blob/main/apps/web/src/components/TransferModal.tsx).
 
 ## Prerequisites
 
@@ -20,6 +20,7 @@ NODE_OPTIONS=--experimental-wasm-modules npx tsx workshop/<step>.ts
 
 | # | In the app | Script | Guide | What it teaches |
 |---|---|---|---|---|
+| 00 | Every import in the app + scripts | — | [`00-libraries.md`](00-libraries.md) | The stack: kit, token-2022 + its `/confidential` helpers, the WASM zk-sdk, ConnectorKit; the Node/WASM runtime note |
 | 01 | The mint behind the faucet | [`01-create-mint.ts`](01-create-mint.ts) | [`01-create-mint.md`](01-create-mint.md) | The mint opts in via one extension; the auditor field is the compliance hook; confidential mint & burn |
 | 02 | **Configure Confidential** + two signature prompts | [`02-configure-account.ts`](02-configure-account.ts) | [`02-configure-account.md`](02-configure-account.md) | Keys derived from signatures over readable text; ElGamal pubkey published on-chain; why recipients configure first |
 | 03 | **Deposit** and **Apply Pending** | [`03-deposit-and-apply.ts`](03-deposit-and-apply.ts) | [`03-deposit-and-apply.md`](03-deposit-and-apply.md) | The three balances (public/pending/available) and why pending exists |
