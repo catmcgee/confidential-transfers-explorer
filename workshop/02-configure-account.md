@@ -34,9 +34,9 @@ flowchart TD
 
 ## Configuration also needs a proof
 
-![The proofs involved in confidential transfers — note pubkey validity in the corner](assets/per-transfer-proofs.png)
+The chain won't store an ElGamal pubkey unless you prove it's well-formed — a malformed pubkey could make funds sent to you unspendable. This is the **pubkey-validity proof**: a one-time proof that you hold the secret key behind the pubkey you're publishing. (The three heavier proofs — range, equality, validity — are per-*transfer* and come in [step 04](04-confidential-transfer.md).)
 
-The chain won't store an ElGamal pubkey unless you prove it's well-formed (a malformed pubkey could make funds unspendable). The setup transaction bundles: create ATA → reallocate for the extension → configure → **verify pubkey-validity proof**.
+The setup transaction bundles: create ATA → reallocate for the extension → configure → **verify pubkey-validity proof**.
 
 ## The key code (from `02-configure-account.ts`)
 
