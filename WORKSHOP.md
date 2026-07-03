@@ -2,7 +2,7 @@
 
 A hands-on introduction for Solana developers: what Token-2022 Confidential Transfers are, how they work, and how to build with them. You'll use the deployed explorer app on devnet, then look under the hood at each action with a step-by-step guide and a minimal, runnable script.
 
-**How the material fits together:** the [deployed app](https://confidential-transfers-explorer-web.vercel.app) is the production experience — connect a wallet, get tokens from the faucet, configure a confidential account, deposit, send, decrypt. Each of those actions has a matching guide in [`workshop/`](workshop/README.md) explaining what happens under the hood, with diagrams, the key code excerpt, and real protocol (Rust) internals with source links. Each guide is paired with a standalone script that does exactly what the app does — stripped down to the essentials — which you can run yourself against devnet.
+**How the material fits together:** the [deployed app](https://confidential-transfers-explorer-web.vercel.app) is the production experience — connect a wallet, get faucet tokens, configure, deposit, send, decrypt. Each action has a diagram-first guide in [`workshop/`](workshop/README.md) plus a standalone script that does exactly what the app does, runnable against devnet.
 
 ## Links
 
@@ -67,7 +67,7 @@ Full explanations live in each step's guide; this is the condensed version.
 NODE_OPTIONS=--experimental-wasm-modules npx tsx workshop/01-create-mint.ts
 ```
 
-Confidential transfers are just a Token-2022 *extension* — the mint opts in at creation. Three config fields matter, especially the auditor: set it and one designated party can decrypt every amount — compliance without a public ledger. In the deployed app, this mint already exists: it's the token the faucet hands out. On the explorer you can see `ConfidentialTransferMint` sitting next to ordinary mint data.
+Confidential transfers are just a Token-2022 *extension* — the mint opts in at creation. Three config fields matter, especially the auditor: set it and one designated party can decrypt every amount. In the app, this mint already exists — it's the token the faucet hands out.
 
 ### 02 — Configure an account · [guide](workshop/02-configure-account.md)
 
@@ -75,7 +75,7 @@ Confidential transfers are just a Token-2022 *extension* — the mint opts in at
 NODE_OPTIONS=--experimental-wasm-modules npx tsx workshop/02-configure-account.ts
 ```
 
-Keys are *derived, not stored* — the script prints the exact message strings that Phantom asks you to sign when you click **Configure Confidential** in the app. Configuring publishes the ElGamal pubkey on-chain, which is why recipients must configure before they can receive.
+Keys are *derived, not stored* — the script prints the exact message strings Phantom asks you to sign in the app. Configuring publishes the ElGamal pubkey on-chain, which is why recipients configure before they can receive.
 
 ### 03 — Deposit & apply · [guide](workshop/03-deposit-and-apply.md)
 
@@ -83,7 +83,7 @@ Keys are *derived, not stored* — the script prints the exact message strings t
 NODE_OPTIONS=--experimental-wasm-modules npx tsx workshop/03-deposit-and-apply.ts
 ```
 
-Three balances — value flows public → pending → available, matching the app's **Deposit** and **Apply Pending** buttons. Pending exists because only the owner can re-encrypt their own running balance. One honest caveat: the *deposit* amount is public; privacy starts inside. Watch the three-balance printout after each stage (1000/0/0 → 500/500/0 → 500/0/500).
+Value flows public → pending → available, matching the app's **Deposit** and **Apply Pending** buttons. The *deposit* amount is public; privacy starts inside. Watch the three-balance printout: 1000/0/0 → 500/500/0 → 500/0/500.
 
 ### 04 — The confidential transfer · [guide](workshop/04-confidential-transfer.md)
 
@@ -91,7 +91,7 @@ Three balances — value flows public → pending → available, matching the ap
 NODE_OPTIONS=--experimental-wasm-modules npx tsx workshop/04-confidential-transfer.ts
 ```
 
-Three proofs (equality: no minting from thin air; validity: same amount encrypted to sender/receiver/auditor; range: no negative amounts). Five transactions because of the 1232-byte limit; context-state accounts are refunded scratch space. This is what the app's **Send** progress bar is counting. The final transfer transaction on the explorer contains *no amount anywhere*.
+Three proofs (equality, validity, range), five transactions because of the 1232-byte limit, context-state accounts as refunded scratch space — this is what the app's **Send** progress bar counts. The final transaction on the explorer contains *no amount anywhere*.
 
 ### 05 — Decrypt · [guide](workshop/05-decrypt.md)
 
@@ -99,7 +99,7 @@ Three proofs (equality: no minting from thin air; validity: same amount encrypte
 NODE_OPTIONS=--experimental-wasm-modules npx tsx workshop/05-decrypt.ts
 ```
 
-The raw base64 block the script prints is what *everyone* — explorer, RPC, validators — sees. The recipient re-signs the same messages, decrypts pending (slow ElGamal, hence the lo/hi split), applies, and reads the total instantly via AES. Two decryption paths, each existing for a reason. This is the app's **Click to decrypt** button end-to-end.
+The raw base64 block the script prints is what *everyone* — explorer, RPC, validators — sees. The recipient re-signs the same messages, decrypts pending (slow ElGamal), applies, and reads the total instantly via AES. This is the app's **Click to decrypt** end-to-end, plus where the public/confidential boundary sits.
 
 ## Troubleshooting
 

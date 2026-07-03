@@ -501,11 +501,13 @@ export async function fetchTransactionDetailFromRpc(
   try {
     const txData = await rpcCall<RpcTransactionData | null>('getTransaction', [
       sig,
-      { encoding: 'jsonParsed', maxSupportedTransactionVersion: 0 },
+      { encoding: 'jsonParsed', maxSupportedTransactionVersion: 0, commitment: 'confirmed' },
     ]);
 
     if (!txData) {
-      cacheSet(cacheKey, null, PAGE_TTL);
+      // Cache misses briefly only — a just-sent transaction becomes visible
+      // within seconds and shouldn't stay "not found" for a full page TTL.
+      cacheSet(cacheKey, null, TX_ERROR_TTL);
       return null;
     }
 
@@ -605,6 +607,7 @@ export async function fetchActivityPageFromRpc(
           address,
           {
             limit: signatureBatchSize,
+            commitment: 'confirmed',
             ...(before ? { before } : {}),
           },
         ]);
@@ -720,7 +723,7 @@ export async function fetchMintInfoFromRpc(address: string): Promise<MintInfo | 
   try {
     const accountInfo = await rpcCall<RpcMintAccountInfoResult>('getAccountInfo', [
       address,
-      { encoding: 'jsonParsed' },
+      { encoding: 'jsonParsed', commitment: 'confirmed' },
     ]);
 
     const parsedInfo = accountInfo.value?.data?.parsed?.info ?? null;
@@ -771,7 +774,7 @@ export async function fetchUserTokenAccountsFromRpc(
     const result = await rpcCall<RpcTokenAccountsByOwnerResult>('getTokenAccountsByOwner', [
       owner,
       { programId: TOKEN_2022_PROGRAM_ID },
-      { encoding: 'jsonParsed' },
+      { encoding: 'jsonParsed', commitment: 'confirmed' },
     ]);
 
     const mintSet = new Set<string>();

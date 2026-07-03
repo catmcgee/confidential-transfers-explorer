@@ -2,25 +2,25 @@
 
 ## In the app
 
-Every token you receive from the faucet in the [deployed app](https://confidential-transfers-explorer-web.vercel.app) belongs to one specific mint — a mint that was created once by the operator (via `bun run setup:mint` at the repo root) with confidential transfers enabled. This step shows what that creation actually does, and the script below is a minimal standalone version of it that creates your own such mint on devnet.
+Every token the faucet hands out in the [deployed app](https://confidential-transfers-explorer-web.vercel.app) belongs to one mint, created once by the operator (`bun run setup:mint`) with confidential transfers enabled. The script below is a minimal standalone version of that creation — run it to make your own mint on devnet.
 
 ## What happens under the hood
 
-Creating the mint means creating a completely ordinary Token-2022 mint — with one addition: a `ConfidentialTransferMint` extension baked in at creation time. That single extension is the entire "opt-in" to confidential transfers. There is no separate privacy program to deploy and no special token standard: public balances, decimals, and the mint authority all keep working exactly as before, and the confidential machinery becomes *available* to any holder of this token. One transaction, three instructions, done.
+An ordinary Token-2022 mint plus one extension — `ConfidentialTransferMint` — baked in at creation. That extension is the entire opt-in: no separate privacy program, no new token standard.
 
 ![Public vs confidential: same token, two worlds](assets/two-balances.png)
 
-Every account for this mint will be able to hold value in both worlds shown above — a public balance anyone can read, and encrypted balances only the owner can read. This step just unlocks the right-hand side.
-
 ## The mechanics
 
-The extension must be initialized **before** the mint itself, because `InitializeMint` finalizes the account layout:
+One transaction, three instructions — the extension initializes **before** the mint, because `InitializeMint` finalizes the account layout:
 
 ```mermaid
+%%{init: {'theme':'base','themeVariables':{'background':'transparent','primaryColor':'#16161f','primaryTextColor':'#ffffff','primaryBorderColor':'#9945FF','secondaryColor':'#0f2e21','secondaryTextColor':'#ffffff','secondaryBorderColor':'#14F195','tertiaryColor':'#241b38','tertiaryTextColor':'#ffffff','lineColor':'#8b8ba7','textColor':'#e6e6f0','fontSize':'14px','clusterBkg':'#101018','clusterBorder':'#3a3a4d','edgeLabelBackground':'#101018','actorBkg':'#16161f','actorTextColor':'#ffffff','actorBorder':'#9945FF','signalColor':'#e6e6f0','signalTextColor':'#e6e6f0','noteBkgColor':'#241b38','noteTextColor':'#e6e6f0','noteBorderColor':'#9945FF','labelBoxBkgColor':'#16161f','labelTextColor':'#ffffff','loopTextColor':'#e6e6f0'}}}%%
 flowchart LR
     A["1 - System program:<br/>create account<br/>(sized for the extension)"] --> B["2 - Token-2022:<br/>InitializeConfidentialTransferMint<br/>(authority, auto-approve, auditor)"]
     B --> C["3 - Token-2022:<br/>InitializeMint<br/>(decimals, mint authority)"]
-    style B fill:#e8d5f9,stroke:#8b5cf6
+    classDef accent fill:#241b38,stroke:#9945FF,color:#ffffff
+    class B accent
 ```
 
 Three configuration choices matter:
@@ -32,8 +32,6 @@ Three configuration choices matter:
 | `auditorElgamalPubkey` | `null` | if set, **every transfer amount is also encrypted to this key** — one designated party can decrypt amounts. Compliance without a public ledger. |
 
 ## The key code (from `01-create-mint.ts`)
-
-The code below is a minimal standalone version of exactly what the app's mint setup does — you can run it against devnet:
 
 ```ts
 const ctMintExtension = extension('ConfidentialTransferMint', {
@@ -60,7 +58,7 @@ Then open the printed mint address in the explorer: the `ConfidentialTransferMin
 
 ## Protocol internals
 
-This is the exact struct the extension writes on-chain — [interface/src/extension/confidential_transfer/mod.rs](https://github.com/solana-program/token-2022/blob/main/interface/src/extension/confidential_transfer/mod.rs) in the Token-2022 repo:
+The exact struct the extension writes on-chain — [interface/src/extension/confidential_transfer/mod.rs](https://github.com/solana-program/token-2022/blob/main/interface/src/extension/confidential_transfer/mod.rs):
 
 ```rust
 pub struct ConfidentialTransferMint {
@@ -77,15 +75,26 @@ pub struct ConfidentialTransferMint {
 }
 ```
 
-Note the doc comment on the auditor field: "Authority to decode **any** transfer amount." The full instruction processing lives in [program/src/extension/confidential_transfer/processor.rs](https://github.com/solana-program/token-2022/blob/main/program/src/extension/confidential_transfer/processor.rs).
+Instruction processing: [processor.rs](https://github.com/solana-program/token-2022/blob/main/program/src/extension/confidential_transfer/processor.rs).
+
+## Confidential mint & burn
+
+`ConfidentialTransferMint` hides *transfer* amounts — but plain `MintTo`/`Burn` still change the mint's **public supply**, and those deltas leak information. The separate `ConfidentialMintBurn` extension closes that hole: mint and burn amounts are encrypted too, so supply stays confidential.
+
+| Action | `ConfidentialTransferMint` only | + `ConfidentialMintBurn` |
+|---|---|---|
+| Transfer | amount encrypted | amount encrypted |
+| Mint / burn | public supply changes — leaks amounts | encrypted; supply stays confidential |
+
+See `getInitializeConfidentialMintBurnInstruction` in `@solana-program/token-2022`, and the [confidential_mint_burn extension](https://github.com/solana-program/token-2022/tree/main/program/src/extension/confidential_mint_burn) in the program source.
 
 ## FAQ
 
 **Can I add confidential transfers to my existing token?**
-No — mint extensions must be set at creation, because they change the mint account's size and layout. You'd launch a new Token-2022 mint (or a wrapped version of your token) with the extension.
+No — mint extensions must be set at creation because they change the account layout. You'd launch a new Token-2022 mint (or a wrapped version) with the extension.
 
 **Does the auditor see who is transacting, or just amounts?**
-Sender and receiver token accounts are public on every transfer anyway — only the *amount* is encrypted. The auditor key lets that one party decrypt amounts too. What's confidential to the world is the amount; the graph of who-paid-whom is visible.
+Sender and receiver accounts are public on every transfer anyway — only the amount is encrypted, and the auditor key lets that one party decrypt amounts too.
 
 **Is this live on mainnet?**
-The Token-2022 program with this extension is deployed on mainnet-beta, and the ZK ElGamal Proof program it relies on is enabled. Check current feature-gate status for your cluster before shipping.
+Yes — Token-2022 and the ZK ElGamal Proof program are live on mainnet-beta; check current feature-gate status for your cluster before shipping.

@@ -2,11 +2,11 @@
 
 ## In the app
 
-When you click **Send** in the [deployed app](https://confidential-transfers-explorer-web.vercel.app), a progress bar counts through several transactions — "generating ZK proofs", then "X of ~Y transactions confirmed". This step explains why one transfer takes that many transactions, and what each one does. The production implementation is `createTransferPlan` and `executeInstructionPlan` in [`apps/web/src/lib/confidentialTransfer.ts`](https://github.com/catmcgee/confidential-transfers-explorer/blob/main/apps/web/src/lib/confidentialTransfer.ts), driven from the send flow in [`apps/web/src/components/TransferModal.tsx`](https://github.com/catmcgee/confidential-transfers-explorer/blob/main/apps/web/src/components/TransferModal.tsx).
+When you click **Send** in the [deployed app](https://confidential-transfers-explorer-web.vercel.app), a progress bar counts through several transactions — "generating ZK proofs", then "X of ~Y transactions confirmed". This step explains why. Production code: [`confidentialTransfer.ts`](https://github.com/catmcgee/confidential-transfers-explorer/blob/main/apps/web/src/lib/confidentialTransfer.ts) · [`TransferModal.tsx`](https://github.com/catmcgee/confidential-transfers-explorer/blob/main/apps/web/src/components/TransferModal.tsx).
 
 ## What happens under the hood
 
-In the script below, Alice sends Bob 123 tokens and nobody watching the chain can tell how much. Her machine encrypts the amount three ways, computes her own new balance, and generates three zero-knowledge proofs *locally* — the chain only verifies. Because the proofs are far bigger than a Solana transaction, the transfer spans **five transactions**: three proofs get verified into temporary "context-state" scratch accounts, the actual transfer instruction points at them, and then the scratch accounts are closed with their rent refunded. This is the centerpiece of the workshop — the script labels each transaction as it lands, so you can follow along.
+Alice sends Bob 123 tokens and nobody watching the chain can tell how much. Her machine encrypts the amount and generates three ZK proofs *locally*; the chain only verifies. The proofs outsize a Solana transaction, so the transfer spans **five transactions** — the script labels each one as it lands.
 
 ![Sender → ZK proof program + Token-2022 → recipient](assets/architecture-overview.png)
 
@@ -14,21 +14,23 @@ In the script below, Alice sends Bob 123 tokens and nobody watching the chain ca
 
 ![One amount, encrypted to sender, receiver, and auditor keys](assets/three-key-encryption.png)
 
-A single *grouped* ciphertext encrypts the same amount under three keys: the **sender's** (so Alice can still reckon her own balance), the **receiver's** (so Bob can decrypt what he got), and the **auditor's** (or a placeholder key if, as in this workshop's mint, there is no auditor). One of the three proofs exists precisely to show all three encryptions really contain the same number.
+One *grouped* ciphertext encrypts the same amount under three keys: sender's, receiver's, and auditor's (or a placeholder if, as here, there is no auditor).
 
-But first — how does Alice even find Bob's encryption key? She reads it off his token account:
+Alice finds Bob's encryption key by reading it off his token account — no key exchange, no handshake:
 
 ```mermaid
+%%{init: {'theme':'base','themeVariables':{'background':'transparent','primaryColor':'#16161f','primaryTextColor':'#ffffff','primaryBorderColor':'#9945FF','secondaryColor':'#0f2e21','secondaryTextColor':'#ffffff','secondaryBorderColor':'#14F195','tertiaryColor':'#241b38','tertiaryTextColor':'#ffffff','lineColor':'#8b8ba7','textColor':'#e6e6f0','fontSize':'14px','clusterBkg':'#101018','clusterBorder':'#3a3a4d','edgeLabelBackground':'#101018','actorBkg':'#16161f','actorTextColor':'#ffffff','actorBorder':'#9945FF','signalColor':'#e6e6f0','signalTextColor':'#e6e6f0','noteBkgColor':'#241b38','noteTextColor':'#e6e6f0','noteBorderColor':'#9945FF','labelBoxBkgColor':'#16161f','labelTextColor':'#ffffff','loopTextColor':'#e6e6f0'}}}%%
 flowchart LR
     ADDR["Bob's wallet address"] --> ATA["derive ATA<br/>(owner, mint, Token-2022)"]
     ATA --> FETCH["fetch token account"]
     FETCH --> EXT["read ConfidentialTransferAccount<br/>extension"]
     EXT --> PK["elgamal_pubkey field"]
     PK --> ENC["encrypt transfer amount<br/>to this key"]
-    style PK fill:#e8d5f9,stroke:#8b5cf6
+    classDef accent fill:#241b38,stroke:#9945FF,color:#ffffff
+    class PK accent
 ```
 
-No key exchange, no handshake — the pubkey Bob published in step 02 is sitting in public account data. (The script prints it. The app does the same lookup when you enter a recipient address — that's its "Configured / Not configured" check.)
+This lookup is the app's "Configured / Not configured" check on a recipient address.
 
 ## The three proofs
 
@@ -42,9 +44,10 @@ No key exchange, no handshake — the pubkey Bob published in step 02 is sitting
 
 ## Why five transactions
 
-A Solana transaction tops out at 1232 bytes; the range proof alone is roughly 1.5 KB. So each proof is verified up-front into a **context-state account** — a tiny scratch account whose only job is to record "this proof checked out". The transfer then just references the three accounts:
+A transaction tops out at 1232 bytes; the range proof alone is ~1.5 KB. So each proof is verified up-front into a **context-state account** — scratch space recording "this proof checked out" — and the transfer references the three:
 
 ```mermaid
+%%{init: {'theme':'base','themeVariables':{'background':'transparent','primaryColor':'#16161f','primaryTextColor':'#ffffff','primaryBorderColor':'#9945FF','secondaryColor':'#0f2e21','secondaryTextColor':'#ffffff','secondaryBorderColor':'#14F195','tertiaryColor':'#241b38','tertiaryTextColor':'#ffffff','lineColor':'#8b8ba7','textColor':'#e6e6f0','fontSize':'14px','clusterBkg':'#101018','clusterBorder':'#3a3a4d','edgeLabelBackground':'#101018','actorBkg':'#16161f','actorTextColor':'#ffffff','actorBorder':'#9945FF','signalColor':'#e6e6f0','signalTextColor':'#e6e6f0','noteBkgColor':'#241b38','noteTextColor':'#e6e6f0','noteBorderColor':'#9945FF','labelBoxBkgColor':'#16161f','labelTextColor':'#ffffff','loopTextColor':'#e6e6f0'}}}%%
 sequenceDiagram
     participant A as Alice's machine
     participant ZK as ZK ElGamal Proof program
@@ -59,17 +62,15 @@ sequenceDiagram
     Note over T22: homomorphically: source available -= amount,<br/>dest pending += amount
 ```
 
-Context accounts are scratch space, not state: the net cost of a transfer is ~5 transaction fees; the rent comes back in tx 5. This sequence is exactly what the app's progress bar is counting.
+Net cost ≈ 5 transaction fees — the rent comes back in tx 5. This is exactly what the app's progress bar counts.
 
-One subtlety worth knowing — the proofs are bound to a **snapshot of Alice's balance ciphertext**:
+One subtlety — the proofs bind to a **snapshot of Alice's balance ciphertext**:
 
 ![Why proofs bind to a ciphertext snapshot — the dust/front-running case](assets/proof-ciphertext-race.png)
 
-If Alice's available-balance ciphertext changes between proof generation and the transfer (say someone deposits dust to her and she applies it, or an attacker tries to replay her proof against different state), the equality proof no longer matches and the transfer fails. Proofs can't be replayed or reused against mutated state.
+If that ciphertext changes before the transfer lands (applied dust, replay against mutated state), the equality proof no longer matches and the transfer fails closed.
 
 ## The key code (from `04-confidential-transfer.ts`)
-
-The code below is a minimal standalone version of exactly what the app's **Send** flow does — you can run it against devnet:
 
 ```ts
 const plan = await getConfidentialTransferInstructionPlan({
@@ -94,11 +95,11 @@ Run it (amount in tokens optional, default 123):
 NODE_OPTIONS=--experimental-wasm-modules npx tsx workshop/04-confidential-transfer.ts
 ```
 
-Open the **last** transaction in the explorer: no amount anywhere in the instruction data. Compare with any normal SPL transfer where the amount sits in plaintext.
+Open the **last** transaction in the explorer: no amount anywhere in the instruction data.
 
 ## Protocol internals
 
-The transfer verifies all three proof contexts before touching balances — [program/src/extension/confidential_transfer/verify_proof.rs](https://github.com/solana-program/token-2022/blob/main/program/src/extension/confidential_transfer/verify_proof.rs), `verify_transfer_proof`:
+The transfer verifies all three proof contexts before touching balances — [verify_proof.rs](https://github.com/solana-program/token-2022/blob/main/program/src/extension/confidential_transfer/verify_proof.rs), `verify_transfer_proof`:
 
 ```rust
 let equality_proof_context = verify_and_extract_context::<
@@ -116,45 +117,18 @@ let range_proof_context =
         account_info_iter, range_proof_instruction_offset, sysvar_account_info)?;
 ```
 
-And in [processor.rs](https://github.com/solana-program/token-2022/blob/main/program/src/extension/confidential_transfer/processor.rs), `process_transfer` spells out the contract (its own comment):
-
-```rust
-// The zero-knowledge proof certifies that:
-//   1. the transfer amount is encrypted in the correct form
-//   2. the source account has enough balance to send the transfer amount
-let proof_context = verify_transfer_proof(
-    account_info_iter,
-    equality_proof_instruction_offset,
-    transfer_amount_ciphertext_validity_proof_instruction_offset,
-    range_proof_instruction_offset,
-)?;
-```
-
-The scratch-account lifecycle is the ZK ElGamal Proof program's `CloseContextState` — [interface/src/instruction.rs](https://github.com/solana-program/zk-elgamal-proof/blob/main/interface/src/instruction.rs) in the zk-elgamal-proof repo:
-
-```rust
-pub enum ProofInstruction {
-    /// Close a zero-knowledge proof context state.
-    ///
-    /// Accounts expected by this instruction:
-    ///   0. `[writable]` The proof context account to close
-    ///   1. `[writable]` The destination account for lamports
-    ///   2. `[signer]` The context account's owner
-    CloseContextState,
-    ...
-}
-```
+The transfer itself is `process_transfer` in [processor.rs](https://github.com/solana-program/token-2022/blob/main/program/src/extension/confidential_transfer/processor.rs); the scratch-account lifecycle is `CloseContextState` in the ZK ElGamal Proof program's [interface/src/instruction.rs](https://github.com/solana-program/zk-elgamal-proof/blob/main/interface/src/instruction.rs).
 
 ## FAQ
 
 **Why not one transaction?**
-The 1232-byte transaction limit versus a ~1.5 KB range proof (plus two more proofs and the transfer itself). Context-state accounts let each proof be verified in its own transaction, then referenced cheaply.
+The 1232-byte transaction limit versus a ~1.5 KB range proof (plus two more proofs and the transfer itself).
 
 **What stops someone replaying a proof, or frontrunning the transfer?**
-Proofs are cryptographically bound to the exact source-balance ciphertext they were generated against (see the race image above). Any change to that ciphertext — including attacker-injected dust that gets applied — invalidates the equality proof and the transfer fails closed.
+Proofs are bound to the exact source-balance ciphertext they were generated against; any change invalidates the equality proof and the transfer fails closed.
 
 **Who pays for all this, and what does it cost?**
-Whoever signs as fee payer — here, one payer covers all five transactions and gets the context-account rent refunded in the final one. Net cost ≈ 5 transaction fees plus the (heavier) compute for on-chain proof verification.
+One fee payer covers all five transactions and gets the context-account rent refunded in the last one — net ≈ 5 transaction fees plus heavier verification compute.
 
 **Can validators or RPCs see the amount while it's in flight?**
-No — the amount never exists in plaintext anywhere in the transaction. Only ciphertexts and proofs travel; the sender's machine is the only place the number ever appears.
+No — only ciphertexts and proofs travel; the sender's machine is the only place the plaintext number ever exists.

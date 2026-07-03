@@ -2,26 +2,27 @@
 
 ## In the app
 
-Once a token is configured, the [deployed app](https://confidential-transfers-explorer-web.vercel.app) shows two more buttons: **Deposit** (public → pending) and **Apply Pending** (pending → available). This step is those two buttons under the hood. The production implementation lives in [`apps/web/src/lib/confidentialTransfer.ts`](https://github.com/catmcgee/confidential-transfers-explorer/blob/main/apps/web/src/lib/confidentialTransfer.ts), driven from the deposit/apply flows in [`apps/web/src/components/TransferModal.tsx`](https://github.com/catmcgee/confidential-transfers-explorer/blob/main/apps/web/src/components/TransferModal.tsx).
+Once a token is configured, the [deployed app](https://confidential-transfers-explorer-web.vercel.app) shows two more buttons: **Deposit** (public → pending) and **Apply Pending** (pending → available). This step is those two buttons under the hood. Production code: [`confidentialTransfer.ts`](https://github.com/catmcgee/confidential-transfers-explorer/blob/main/apps/web/src/lib/confidentialTransfer.ts) · [`TransferModal.tsx`](https://github.com/catmcgee/confidential-transfers-explorer/blob/main/apps/web/src/components/TransferModal.tsx).
 
 ## What happens under the hood
 
-The script below mints 1000 public tokens to Alice, moves 500 of them into her confidential *pending* balance with a `Deposit`, and then folds that pending amount into her spendable *available* balance with `ApplyPendingBalance`. Watching the printed balances after each stage is the whole lesson: value flows public → pending → available, and only then is it spendable confidentially. One honest caveat: the deposit **amount is public** — anyone can see 500 tokens entered the confidential system. Privacy starts once tokens are inside.
+The script mints 1000 public tokens to Alice, `Deposit`s 500 into her *pending* balance, then folds pending into spendable *available* with `ApplyPendingBalance`. Value flows public → pending → available — and note the deposit **amount is public**; privacy starts once tokens are inside.
 
 ![Pending vs available, and ApplyPendingBalance between them](assets/pending-vs-available.png)
 
 ## Why does "pending" exist at all?
 
-Because only the **owner** can re-encrypt their own running balance. Spending requires proving statements about your balance ciphertext — so that ciphertext must not change under your feet while other people credit you. The protocol solves this by giving incoming credits their own bucket:
+Because only the **owner** can re-encrypt their own running balance, incoming credits get their own bucket:
 
-- **pending** — where deposits and incoming transfers land. Anyone can *add* to it homomorphically (ElGamal ciphertexts can be added without decrypting!), nobody can spend from it.
-- **available** — what you can spend. Only the owner ever rewrites it, via `ApplyPendingBalance`.
+- **pending** — where deposits and incoming transfers land. Anyone can *add* to it homomorphically (ElGamal ciphertexts add without decrypting!), nobody can spend from it.
+- **available** — what you can spend. Only the owner rewrites it, via `ApplyPendingBalance`.
 
 ## The lo/hi ciphertext trick
 
-The pending balance is stored as **two** ElGamal ciphertexts, not one. ElGamal decryption is a brute-force discrete-log search — feasible only for small numbers — so amounts are kept in small chunks:
+ElGamal decryption is a brute-force discrete-log search — feasible only for small numbers — so the pending balance is stored as **two** ciphertexts of small chunks:
 
 ```mermaid
+%%{init: {'theme':'base','themeVariables':{'background':'transparent','primaryColor':'#16161f','primaryTextColor':'#ffffff','primaryBorderColor':'#9945FF','secondaryColor':'#0f2e21','secondaryTextColor':'#ffffff','secondaryBorderColor':'#14F195','tertiaryColor':'#241b38','tertiaryTextColor':'#ffffff','lineColor':'#8b8ba7','textColor':'#e6e6f0','fontSize':'14px','clusterBkg':'#101018','clusterBorder':'#3a3a4d','edgeLabelBackground':'#101018','actorBkg':'#16161f','actorTextColor':'#ffffff','actorBorder':'#9945FF','signalColor':'#e6e6f0','signalTextColor':'#e6e6f0','noteBkgColor':'#241b38','noteTextColor':'#e6e6f0','noteBorderColor':'#9945FF','labelBoxBkgColor':'#16161f','labelTextColor':'#ffffff','loopTextColor':'#e6e6f0'}}}%%
 flowchart TD
     A["Deposit amount (48-bit max)<br/>e.g. 500000000000"] --> SPLIT{"split at bit 16"}
     SPLIT -->|"low 16 bits"| LO["pending_balance_lo<br/>ElGamal ciphertext of low 16 bits"]
@@ -29,16 +30,15 @@ flowchart TD
     LO --> DEC["owner decrypts:<br/>total = lo + (hi << 16)"]
     HI --> DEC
     DEC --> APPLY["ApplyPendingBalance:<br/>available += pending (homomorphic add)<br/>owner re-encrypts decryptable balance (AES)<br/>pending reset to zero-ciphertext"]
-    style LO fill:#e8d5f9,stroke:#8b5cf6
-    style HI fill:#e8d5f9,stroke:#8b5cf6
-    style APPLY fill:#d5f9e8,stroke:#10b981
+    classDef accent fill:#241b38,stroke:#9945FF,color:#ffffff
+    classDef ok fill:#0f2e21,stroke:#14F195,color:#ffffff
+    class LO,HI accent
+    class APPLY ok
 ```
 
-Small exponents keep the discrete-log search fast; the owner reassembles the true amount as `lo + (hi << 16)`. (`decryptPending` in `helpers.ts` does exactly this.)
+The owner reassembles the true amount as `lo + (hi << 16)` — `decryptPending` in `helpers.ts` does exactly this.
 
 ## The key code (from `03-deposit-and-apply.ts`)
-
-The code below is a minimal standalone version of exactly what the app's **Deposit** and **Apply Pending** buttons do — you can run it against devnet:
 
 ```ts
 // public -> encrypted pending (the amount here is a PUBLIC instruction arg!)
@@ -64,11 +64,11 @@ Run it:
 NODE_OPTIONS=--experimental-wasm-modules npx tsx workshop/03-deposit-and-apply.ts
 ```
 
-Watch the three balance lines printed after each stage — public 1000/0/0 → 500/500/0 → 500/0/500.
+Watch the three balance lines printed after each stage — 1000/0/0 → 500/500/0 → 500/0/500.
 
 ## Protocol internals
 
-`Deposit` — [processor.rs](https://github.com/solana-program/token-2022/blob/main/program/src/extension/confidential_transfer/processor.rs), `process_deposit`. The plaintext amount is split lo/hi and added **homomorphically** to the pending ciphertexts — the program never sees or needs the current pending value:
+`Deposit` — [processor.rs](https://github.com/solana-program/token-2022/blob/main/program/src/extension/confidential_transfer/processor.rs), `process_deposit`. The plaintext amount is split lo/hi and added **homomorphically** — the program never sees the current pending value:
 
 ```rust
 // A deposit amount must be a 48-bit number
@@ -88,33 +88,15 @@ confidential_transfer_account.pending_balance_hi = ciphertext_arithmetic::add_to
 confidential_transfer_account.increment_pending_balance_credit_counter()?;
 ```
 
-`ApplyPendingBalance` — same file, `process_apply_pending_balance`. Ciphertext addition on-chain, plus a credit-counter handshake that detects credits landing *between* the owner's decryption and this instruction executing:
-
-```rust
-confidential_transfer_account.available_balance = ciphertext_arithmetic::add_with_lo_hi(
-    &confidential_transfer_account.available_balance,
-    &confidential_transfer_account.pending_balance_lo,
-    &confidential_transfer_account.pending_balance_hi,
-).ok_or(TokenError::CiphertextArithmeticFailed)?;
-
-confidential_transfer_account.expected_pending_balance_credit_counter =
-    *expected_pending_balance_credit_counter;    // what the owner saw when signing
-confidential_transfer_account.decryptable_available_balance =
-    *new_decryptable_available_balance;          // owner's fresh AES cache
-confidential_transfer_account.pending_balance_credit_counter = 0.into();
-confidential_transfer_account.pending_balance_lo = EncryptedBalance::zeroed();
-confidential_transfer_account.pending_balance_hi = EncryptedBalance::zeroed();
-```
-
-If `expected` ≠ `actual` counter, the owner's AES cache is stale — clients detect this and re-apply. The state fields live in [interface/src/extension/confidential_transfer/mod.rs](https://github.com/solana-program/token-2022/blob/main/interface/src/extension/confidential_transfer/mod.rs).
+`ApplyPendingBalance` (`process_apply_pending_balance`, same file) is more ciphertext addition plus the credit-counter handshake. State fields: [interface/src/extension/confidential_transfer/mod.rs](https://github.com/solana-program/token-2022/blob/main/interface/src/extension/confidential_transfer/mod.rs).
 
 ## FAQ
 
 **Why is the deposit amount public? Doesn't that leak everything?**
-Entering and exiting the confidential system is public (deposit/withdraw); movement *inside* it is not. Think of it like an on/off-ramp: observers see totals entering, but not how value moves once inside. Serious privacy usage keeps balances inside.
+Entering and exiting the confidential system is public; movement *inside* it is not. Observers see totals entering, not how value moves once inside.
 
 **What happens if someone credits me while I'm applying?**
-That's what the credit counter is for — the owner signs the counter value they decrypted against; if more credits landed since, the mismatch is visible on-chain and the client re-applies. Funds are never lost, the AES cache is just refreshed.
+The credit counter catches it: the owner signs the counter value they decrypted against, a mismatch is visible on-chain, and the client re-applies. Funds are never lost.
 
 **Why 48-bit max deposits?**
-So the hi chunk stays ≤ 32 bits, keeping the owner's ElGamal discrete-log decryption tractable. Amounts larger than 2^48 raw units just take multiple deposits.
+So the hi chunk stays ≤ 32 bits, keeping ElGamal discrete-log decryption tractable. Larger amounts just take multiple deposits.

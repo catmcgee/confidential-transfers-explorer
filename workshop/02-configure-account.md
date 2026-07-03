@@ -2,17 +2,18 @@
 
 ## In the app
 
-In the [deployed app](https://confidential-transfers-explorer-web.vercel.app), a token that hasn't opted in yet shows a **Configure Confidential** button. Click it and your wallet prompts you to sign **two short text messages** before a transaction goes out. Those two signature prompts are the heart of this step: they are where your encryption keys come from. The production implementation is `deriveCtKeys` and `createConfigureAccountPlan` in [`apps/web/src/lib/confidentialTransfer.ts`](https://github.com/catmcgee/confidential-transfers-explorer/blob/main/apps/web/src/lib/confidentialTransfer.ts), wired to the button in [`apps/web/src/components/TransferModal.tsx`](https://github.com/catmcgee/confidential-transfers-explorer/blob/main/apps/web/src/components/TransferModal.tsx).
+In the [deployed app](https://confidential-transfers-explorer-web.vercel.app), a token that hasn't opted in shows a **Configure Confidential** button. Click it and your wallet prompts you to sign **two short text messages** before any transaction goes out — those two signatures are where your encryption keys come from. Production code: [`confidentialTransfer.ts`](https://github.com/catmcgee/confidential-transfers-explorer/blob/main/apps/web/src/lib/confidentialTransfer.ts) · [`TransferModal.tsx`](https://github.com/catmcgee/confidential-transfers-explorer/blob/main/apps/web/src/components/TransferModal.tsx).
 
 ## What happens under the hood
 
-The script below reproduces the flow with two fresh test wallets — Alice and Bob: fund them with a little SOL and give each a *confidential-ready* token account. The interesting part is where their encryption keys come from: nowhere. Each owner signs two short, human-readable messages with their ordinary wallet key, and the signatures are stretched into an ElGamal keypair (for the on-chain encrypted balances) and an AES key (for their private balance cache). Configuring the account then publishes the ElGamal *public* key into the token account on-chain — which is exactly what future senders will encrypt to, and exactly why a recipient must configure **before** anyone can send to them.
+The script gives two fresh test wallets — Alice and Bob — a *confidential-ready* token account each. Each owner signs two readable messages, the signatures become an ElGamal keypair and an AES key, and configuring publishes the ElGamal *public* key on-chain — what senders encrypt to, and why recipients must configure **before** anyone can send to them.
 
 ## Key derivation: signatures over readable text
 
-This is the core mechanic. Nothing is generated randomly and nothing is stored — the keys are a pure function of (wallet, owner, mint):
+Nothing is generated randomly and nothing is stored — the keys are a pure function of (wallet, owner, mint):
 
 ```mermaid
+%%{init: {'theme':'base','themeVariables':{'background':'transparent','primaryColor':'#16161f','primaryTextColor':'#ffffff','primaryBorderColor':'#9945FF','secondaryColor':'#0f2e21','secondaryTextColor':'#ffffff','secondaryBorderColor':'#14F195','tertiaryColor':'#241b38','tertiaryTextColor':'#ffffff','lineColor':'#8b8ba7','textColor':'#e6e6f0','fontSize':'14px','clusterBkg':'#101018','clusterBorder':'#3a3a4d','edgeLabelBackground':'#101018','actorBkg':'#16161f','actorTextColor':'#ffffff','actorBorder':'#9945FF','signalColor':'#e6e6f0','signalTextColor':'#e6e6f0','noteBkgColor':'#241b38','noteTextColor':'#e6e6f0','noteBorderColor':'#9945FF','labelBoxBkgColor':'#16161f','labelTextColor':'#ffffff','loopTextColor':'#e6e6f0'}}}%%
 flowchart TD
     W["Wallet private key<br/>(never leaves the wallet)"] -->|"signMessage"| M1["Text: 'ElGamalSecretKey:&lt;owner&gt;:&lt;mint&gt;'"]
     W -->|"signMessage"| M2["Text: 'AeKey:&lt;owner&gt;:&lt;mint&gt;'"]
@@ -21,25 +22,23 @@ flowchart TD
     S1 --> K1["ElGamalKeypair.fromSignature()<br/>→ encrypts on-chain balances"]
     S2 --> K2["AeKey.fromSignature()<br/>→ owner's fast balance cache"]
     K1 -.->|"public half goes on-chain<br/>in ConfigureAccount"| CHAIN[("Token account:<br/>elgamal_pubkey")]
-    style K1 fill:#e8d5f9,stroke:#8b5cf6
-    style K2 fill:#d5e8f9,stroke:#3b82f6
+    classDef accent fill:#241b38,stroke:#9945FF,color:#ffffff
+    classDef ok fill:#0f2e21,stroke:#14F195,color:#ffffff
+    class K1 accent
+    class K2 ok
 ```
 
-Three properties worth internalizing:
-
-- **Deterministic = re-derivable anywhere.** Sign the same text in this script, in the web app, on a new laptop — same keys come out. Lose your "ElGamal key"? You never had it stored; just sign again.
-- **Why readable text?** Wallets like Phantom refuse to sign opaque binary blobs via `signMessage` (they can't show users what they're approving). Plain text is wallet-friendly and just as deterministic. This is the exact scheme the web app uses ([`confidentialTransfer.ts`](https://github.com/catmcgee/confidential-transfers-explorer/blob/main/apps/web/src/lib/confidentialTransfer.ts)), so a wallet behaves identically in both.
-- **Per owner AND per mint.** Different mints yield different keys — one compromised mint's keys reveal nothing about another's.
+- **Deterministic = re-derivable anywhere.** Same text, same wallet → same keys, on any device, forever.
+- **Readable text** because wallets like Phantom refuse opaque binary `signMessage` payloads — and it's the exact scheme the web app uses.
+- **Per owner AND per mint** — one mint's keys reveal nothing about another's.
 
 ## Configuration also needs a proof
 
 ![The proofs involved in confidential transfers — note pubkey validity in the corner](assets/per-transfer-proofs.png)
 
-Your first taste of the ZK flow: the chain won't store an ElGamal pubkey unless you prove it's well-formed (that you actually hold a secret key for it — a malformed pubkey could make funds sent to you unspendable or violate protocol assumptions). Each account setup transaction bundles: create ATA → reallocate for the extension → configure → **verify pubkey-validity proof**.
+The chain won't store an ElGamal pubkey unless you prove it's well-formed (a malformed pubkey could make funds unspendable). The setup transaction bundles: create ATA → reallocate for the extension → configure → **verify pubkey-validity proof**.
 
 ## The key code (from `02-configure-account.ts`)
-
-The code below is a minimal standalone version of exactly what the app's **Configure Confidential** button does — you can run it against devnet:
 
 ```ts
 // helpers.ts — deriveCtKeys: matches the web app exactly
@@ -63,11 +62,11 @@ Run it:
 NODE_OPTIONS=--experimental-wasm-modules npx tsx workshop/02-configure-account.ts
 ```
 
-The script prints the literal message strings being signed — the same text your wallet shows you in the app. Then open a token account in the explorer and find the `ConfidentialTransferAccount` extension with its `elgamalPubkey` field.
+The script prints the literal message strings being signed — the same text your wallet shows in the app. Then find the `ConfidentialTransferAccount` extension (with `elgamalPubkey`) on a token account in the explorer.
 
 ## Protocol internals
 
-`ConfigureAccount` processing — [program/src/extension/confidential_transfer/processor.rs](https://github.com/solana-program/token-2022/blob/main/program/src/extension/confidential_transfer/processor.rs), `process_configure_account`. The ElGamal pubkey is only accepted out of a *verified proof context*, then written into the account with zeroed balances:
+`ConfigureAccount` processing — [processor.rs](https://github.com/solana-program/token-2022/blob/main/program/src/extension/confidential_transfer/processor.rs), `process_configure_account`. The pubkey is only accepted out of a *verified proof context*, then written with zeroed balances:
 
 ```rust
 let elgamal_pubkey = match elgamal_pubkey_source {
@@ -91,15 +90,15 @@ confidential_transfer_account.pending_balance_hi = EncryptedBalance::zeroed();
 confidential_transfer_account.available_balance = EncryptedBalance::zeroed();
 ```
 
-Two nice details in that snippet: `approved` is set straight from the mint's `auto_approve_new_accounts` (the step 01 choice landing here), and all-zero bytes are a *valid ElGamal encryption of zero* — fresh accounts start as legitimate ciphertext.
+Note: `approved` comes straight from the step 01 `auto_approve_new_accounts` choice, and all-zero bytes are a *valid ElGamal encryption of zero*.
 
 ## FAQ
 
 **What if I lose my ElGamal key?**
-You can't lose it in any meaningful sense — it's re-derived from a wallet signature over deterministic text whenever needed. Losing the *wallet* key is the real risk, same as losing all your funds today.
+You can't — it's re-derived from a wallet signature whenever needed. Losing the *wallet* key is the real risk, same as today.
 
 **One key for every token, or one per mint?**
-Per `(owner, mint)` pair here. The protocol also supports an `ElGamalRegistry` variant (`ConfigureAccountWithRegistry`) where one globally registered ElGamal pubkey is reused across mints — that's the other match arm in the processor code above.
+Per `(owner, mint)` pair here. The protocol also supports a global `ElGamalRegistry` variant (`ConfigureAccountWithRegistry`) — the other match arm in the processor code above.
 
 **Can someone send me confidential tokens before I configure?**
-No — there's no ElGamal pubkey on your account to encrypt to. That's why the explorer app (and this workshop) treat "configure your account" as the onboarding step for recipients.
+No — there's no ElGamal pubkey on your account to encrypt to. That's why configuration is the onboarding step for recipients.
