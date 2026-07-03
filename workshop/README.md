@@ -20,7 +20,7 @@ NODE_OPTIONS=--experimental-wasm-modules npx tsx workshop/<step>.ts
 
 | # | In the app | Script | Guide | What it teaches |
 |---|---|---|---|---|
-| 00 | Every import in the app + scripts | — | [`00-libraries.md`](00-libraries.md) | The stack: kit, token-2022 + its `/confidential` helpers, the WASM zk-sdk, ConnectorKit; the Node/WASM runtime note |
+| 00 | — | — | [`00-libraries.md`](00-libraries.md) | Confidential Transfers is a Token-2022 extension; the libraries (kit, token-2022 `/confidential`, WASM zk-sdk) |
 | 01 | The mint behind the faucet | [`01-create-mint.ts`](01-create-mint.ts) | [`01-create-mint.md`](01-create-mint.md) | The mint opts in via one extension; the auditor field is the compliance hook; confidential mint & burn |
 | 02 | **Configure Confidential** + two signature prompts | [`02-configure-account.ts`](02-configure-account.ts) | [`02-configure-account.md`](02-configure-account.md) | Keys derived from signatures over readable text; ElGamal pubkey published on-chain; why recipients configure first |
 | 03 | **Deposit** and **Apply Pending** | [`03-deposit-and-apply.ts`](03-deposit-and-apply.ts) | [`03-deposit-and-apply.md`](03-deposit-and-apply.md) | The three balances (public/pending/available) and why pending exists |
