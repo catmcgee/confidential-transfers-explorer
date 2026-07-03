@@ -70,30 +70,20 @@ One subtlety — the proofs bind to a **snapshot of Alice's balance ciphertext**
 
 If that ciphertext changes before the transfer lands (applied dust, replay against mutated state), the equality proof no longer matches and the transfer fails closed.
 
-## The key code (from `04-confidential-transfer.ts`)
+## The helpers
 
-```ts
-const plan = await getConfidentialTransferInstructionPlan({
-  sourceToken: address(alice.tokenAccount),
-  mint,
-  destinationToken: address(bob.tokenAccount),
-  sourceTokenAccount: sourceToken.data,        // snapshot the proofs bind to
-  destinationTokenAccount: destinationToken.data,
-  authority: aliceSigner,
-  amount,
-  sourceElgamalKeypair: aliceKeys.elgamalKeypair,
-  aesKey: aliceKeys.aesKey,
-  payer,
-  rpc,
-});
-await executePlan(tools, plan);   // ~5 transactions, each labeled as it lands
-```
+One helper covers the entire flow:
 
-Run it (amount in tokens optional, default 123):
+- **`getConfidentialTransferInstructionPlan`** (`@solana-program/token-2022/confidential`) — generates all three proofs locally, creates, verifies, and closes the context-state accounts, and builds the transfer instruction — returned as one instruction plan. The fetched source/destination accounts you pass in are the snapshot the proofs bind to.
 
-```bash
-NODE_OPTIONS=--experimental-wasm-modules npx tsx workshop/04-confidential-transfer.ts
-```
+  ```ts
+  await getConfidentialTransferInstructionPlan({ sourceToken, destinationToken, mint, authority, amount,
+    sourceTokenAccount, destinationTokenAccount, sourceElgamalKeypair, aesKey, payer, rpc })
+  ```
+
+- **`createTransactionPlanner`** + **`createTransactionPlanExecutor`** (`@solana/kit`) — executing the returned plan is kit's job: the planner packs it into the ~5 transactions, the executor signs and sends each one.
+
+The withdraw sibling exists too: **`getConfidentialWithdrawInstructionPlan`** (`@solana-program/token-2022/confidential`) does encrypted available → public with the same proof-plan machinery.
 
 Open the **last** transaction in the explorer: no amount anywhere in the instruction data.
 

@@ -37,26 +37,25 @@ flowchart TD
 - **Pending must be ElGamal** — that's what lets senders add to it homomorphically; the price is slow decryption, hence the lo/hi chunks.
 - **Available gets an AES companion** — owner-written, instant to decrypt; the ElGamal `available_balance` stays the source of truth proofs bind to.
 
-## The key code (from `05-decrypt.ts` / `helpers.ts`)
+## The helpers
 
-```ts
-// what an outsider sees — just bytes off the account
-console.log(toBase64(ct.pendingBalanceLow));   // gl6KNHyU54NR1SGeS2pXIs5FrCw0...
+There is **no high-level helper** for this step — decryption is the one place you talk to the crypto library, `@solana/zk-sdk`, directly:
 
-// what Bob sees — ElGamal discrete-log on the lo/hi chunks
-const lo = elgamalSecretKey.decrypt(ElGamalCiphertext.fromBytes(ct.pendingBalanceLow));
-const hi = elgamalSecretKey.decrypt(ElGamalCiphertext.fromBytes(ct.pendingBalanceHigh));
-const received = lo + (hi << 16n);             // = 123 tokens
+- **`ElGamalCiphertext.fromBytes`** + **`ElGamalSecretKey.decrypt`** (`@solana/zk-sdk`) — decrypt the pending balance. ElGamal decryption is a *bounded discrete-log search*, feasible only for small values — exactly why pending lives in lo/hi chunks. Decrypt both and recombine:
 
-// after applying: instant AES decryption of his own balance cache
-const available = aesKey.decrypt(AeCiphertext.fromBytes(ct.decryptableAvailableBalance));
-```
+  ```ts
+  const lo = elgamalSecretKey.decrypt(ElGamalCiphertext.fromBytes(ct.pendingBalanceLow));
+  const hi = elgamalSecretKey.decrypt(ElGamalCiphertext.fromBytes(ct.pendingBalanceHigh));
+  const pending = lo + (hi << 16n);
+  ```
 
-Run it:
+- **`AeCiphertext.fromBytes`** + **`AeKey.decrypt`** (`@solana/zk-sdk`) — decrypt the owner's AES balance cache. Instant, no search.
 
-```bash
-NODE_OPTIONS=--experimental-wasm-modules npx tsx workshop/05-decrypt.ts
-```
+  ```ts
+  const available = aesKey.decrypt(AeCiphertext.fromBytes(ct.decryptableAvailableBalance));
+  ```
+
+(The apply in the middle of the script reuses step 03's `getApplyConfidentialPendingBalanceInstructionFromToken`.)
 
 The "outsider" block (ciphertext) versus the decrypted numbers below it is the app's "encrypted" badge versus the unlocked balance.
 

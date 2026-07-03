@@ -38,31 +38,22 @@ flowchart TD
 
 The owner reassembles the true amount as `lo + (hi << 16)` — `decryptPending` in `helpers.ts` does exactly this.
 
-## The key code (from `03-deposit-and-apply.ts`)
+## The helpers
 
-```ts
-// public -> encrypted pending (the amount here is a PUBLIC instruction arg!)
-getConfidentialDepositInstruction({
-  token: address(alice.tokenAccount), mint,
-  authority: aliceSigner, amount: DEPOSIT_AMOUNT, decimals: DECIMALS,
-})
+One call per instruction:
 
-// pending -> available: Alice decrypts pending locally and re-encrypts
-// her new available balance under her own AES key
-getApplyConfidentialPendingBalanceInstructionFromToken({
-  token: address(alice.tokenAccount),
-  tokenAccount: token.data,
-  authority: aliceSigner,
-  elgamalSecretKey: keys.elgamalSecretKey,
-  aesKey: keys.aesKey,
-})
-```
+- **`getConfidentialDepositInstruction`** (`@solana-program/token-2022`) — public → pending. A plain instruction builder, not a plan: deposits involve no proofs, so nothing else is needed. The amount is a public instruction argument.
 
-Run it:
+  ```ts
+  getConfidentialDepositInstruction({ token, mint, authority, amount, decimals })
+  ```
 
-```bash
-NODE_OPTIONS=--experimental-wasm-modules npx tsx workshop/03-deposit-and-apply.ts
-```
+- **`getApplyConfidentialPendingBalanceInstructionFromToken`** (`@solana-program/token-2022/confidential`) — pending → available. It fetches nothing itself: you pass an already-fetched token account (`fetchToken` from `@solana-program/token-2022`), and it decrypts the pending balance and re-encrypts the owner's decryptable balance locally.
+
+  ```ts
+  const token = await fetchToken(rpc, tokenAddress);
+  getApplyConfidentialPendingBalanceInstructionFromToken({ token, tokenAccount: token.data, authority, elgamalSecretKey, aesKey })
+  ```
 
 Watch the three balance lines printed after each stage — 1000/0/0 → 500/500/0 → 500/0/500.
 

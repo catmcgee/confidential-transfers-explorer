@@ -38,29 +38,30 @@ The chain won't store an ElGamal pubkey unless you prove it's well-formed — a 
 
 The setup transaction bundles: create ATA → reallocate for the extension → configure → **verify pubkey-validity proof**.
 
-## The key code (from `02-configure-account.ts`)
+## The helpers
 
-```ts
-// helpers.ts — deriveCtKeys: matches the web app exactly
-const elgamalKeypair = ElGamalKeypair.fromSignature(await signText(`ElGamalSecretKey:${signer.address}:${mint}`));
-const aesKey = AeKey.fromSignature(await signText(`AeKey:${signer.address}:${mint}`));
+Account setup is a single helper:
 
-// 02-configure-account.ts — one plan does ATA create + reallocate + configure + proof
-await executePlan(tools, await getCreateConfidentialTransferAccountInstructionPlan({
-  payer,
-  owner: alice.signer,
-  mint,
-  rpc,
-  elgamalKeypair: aliceKeys.elgamalKeypair,
-  aesKey: aliceKeys.aesKey,
-}));
-```
+- **`getCreateConfidentialTransferAccountInstructionPlan`** (`@solana-program/token-2022/confidential`) — one plan that creates the ATA, reallocates it for the extension, configures the account, and verifies the pubkey-validity proof.
 
-Run it:
+  ```ts
+  await getCreateConfidentialTransferAccountInstructionPlan({ payer, owner, mint, rpc, elgamalKeypair, aesKey })
+  ```
 
-```bash
-NODE_OPTIONS=--experimental-wasm-modules npx tsx workshop/02-configure-account.ts
-```
+For the keys it takes, there are official helpers — with one important caveat:
+
+- **`deriveElGamalKeypairForOwnerMint`** / **`deriveAeKeyForOwnerMint`** (`@solana-program/token-2022/confidential`) — derive the keys from a wallet signature, but they ask the signer to sign a **raw-byte** message, which Phantom refuses ("You cannot sign solana transactions using sign message"). Use them with keypair signers (scripts, backends).
+
+  ```ts
+  await deriveElGamalKeypairForOwnerMint({ signer, owner, mint })
+  ```
+
+- **`ElGamalKeypair.fromSignature`** / **`AeKey.fromSignature`** (`@solana/zk-sdk`) — what this repo uses instead: sign human-readable text with the wallet, then turn the 64-byte signature into keys directly. Browser-wallet friendly, same determinism.
+
+  ```ts
+  ElGamalKeypair.fromSignature(await signText(`ElGamalSecretKey:${owner}:${mint}`))
+  AeKey.fromSignature(await signText(`AeKey:${owner}:${mint}`))
+  ```
 
 The script prints the literal message strings being signed — the same text your wallet shows in the app. Then find the `ConfidentialTransferAccount` extension (with `elgamalPubkey`) on a token account in the explorer.
 

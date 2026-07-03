@@ -31,30 +31,29 @@ Three configuration choices matter:
 | `autoApproveNewAccounts` | `true` | anyone may configure a confidential account; set `false` for allowlist-style onboarding |
 | `auditorElgamalPubkey` | `null` | if set, **every transfer amount is also encrypted to this key** — one designated party can decrypt amounts. Compliance without a public ledger. |
 
-## The key code (from `01-create-mint.ts`)
+## The helpers
 
-```ts
-const ctMintExtension = extension('ConfidentialTransferMint', {
-  authority: payer.address,          // can update the CT config later
-  autoApproveNewAccounts: true,      // no gatekeeping: anyone can opt in
-  auditorElgamalPubkey: null,        // no auditor — amounts visible to NO third party
-});
-const space = BigInt(getMintSize([ctMintExtension]));
+There is **no one-shot "create confidential mint" helper** — you compose three instruction builders yourself, in this exact order (the extension must be written *before* `InitializeMint` finalizes the account layout):
 
-await executePlan(tools, nonDivisibleSequentialInstructionPlan([
-  getCreateAccountInstruction({ payer, newAccount: mintSigner, lamports: rent, space, programAddress: TOKEN_2022_PROGRAM_ADDRESS }),
-  getInitializeConfidentialTransferMintInstruction({ mint, authority: payer.address, autoApproveNewAccounts: true, auditorElgamalPubkey: null }),
-  getInitializeMintInstruction({ mint, decimals: DECIMALS, mintAuthority: payer.address, freezeAuthority: null }),
-]));
-```
+- **`getCreateAccountInstruction`** (`@solana-program/system`) — allocates the mint account, owned by Token-2022. Size it with `getMintSize([extension('ConfidentialTransferMint', {...})])` from `@solana-program/token-2022`.
 
-Run it:
+  ```ts
+  getCreateAccountInstruction({ payer, newAccount, lamports, space, programAddress: TOKEN_2022_PROGRAM_ADDRESS })
+  ```
 
-```bash
-NODE_OPTIONS=--experimental-wasm-modules npx tsx workshop/01-create-mint.ts
-```
+- **`getInitializeConfidentialTransferMintInstruction`** (`@solana-program/token-2022`) — writes the extension. This one instruction *is* the entire confidential opt-in.
 
-Then open the printed mint address in the explorer: the `ConfidentialTransferMint` extension sits right next to ordinary mint data.
+  ```ts
+  getInitializeConfidentialTransferMintInstruction({ mint, authority, autoApproveNewAccounts, auditorElgamalPubkey })
+  ```
+
+- **`getInitializeMintInstruction`** (`@solana-program/token-2022`) — ordinary mint initialization (decimals, mint authority), last.
+
+  ```ts
+  getInitializeMintInstruction({ mint, decimals, mintAuthority, freezeAuthority })
+  ```
+
+After running the script, open the printed mint address in the explorer: the `ConfidentialTransferMint` extension sits right next to ordinary mint data.
 
 ## Protocol internals
 
