@@ -19,7 +19,7 @@
  *
  *   (The script quietly sets up Alice's confidential token account first —
  *   an account must be configured with an encryption key before it can hold
- *   encrypted balances. How that works is step 04's deep-dive.)
+ *   encrypted balances. How that works is step 03's deep-dive.)
  *
  * WHAT TO POINT AT
  *   The three balance lines printed after each stage: watch value move
@@ -86,11 +86,11 @@ async function main() {
 
   // --- 0. Setup: a fresh wallet for Alice, funded and configured -----------
   // A token account must be configured with an encryption key before it can
-  // hold encrypted balances — we do that quietly here and unpack it in 04.
+  // hold encrypted balances — we do that quietly here and unpack it in 03.
   // Alice's 32-byte seed goes into state.json so later steps can sign as her.
   const alice = await newOwner();
   console.log(`Alice: ${alice.signer.address}`);
-  console.log("Setting up Alice's confidential account (how configuration works is step 04):");
+  console.log("Setting up Alice's confidential account (how configuration works is step 03):");
   await executeInstructions(tools, [
     getTransferSolInstruction({ source: payer, destination: alice.signer.address, amount: SOL_FOR_FEES }),
   ]);
@@ -151,7 +151,8 @@ async function main() {
   await printBalances(aliceAta, keys, 'after apply');
 
   console.log(`\nDone. Alice now has ${ui(DEPOSIT_AMOUNT)} SPENDABLE confidential tokens,`);
-  console.log('and the remainder is still public. Step 03 sends some of it to Bob — secretly.');
+  console.log('and the remainder is still public. Step 03 unpacks how her account got');
+  console.log('configured; step 04 sends some of it to Bob — secretly.');
 
   writeState({
     alice: { name: 'Alice', address: alice.signer.address, secretBase58: alice.secretBase58, tokenAccount: aliceAta },

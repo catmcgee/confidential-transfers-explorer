@@ -1,4 +1,4 @@
-# Step 03 — The Confidential Transfer
+# Step 04 — The Confidential Transfer
 
 ![Sender → ZK proof program + Token-2022 → recipient](assets/architecture-overview.png)
 

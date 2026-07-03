@@ -1,4 +1,4 @@
-# Step 04 — Owners, Signature-Derived Keys, and Account Configuration
+# Step 03 — Owners, Signature-Derived Keys, and Account Configuration
 
 ## Key derivation: signatures over readable text
 

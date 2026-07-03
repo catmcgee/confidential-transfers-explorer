@@ -1,11 +1,11 @@
 /**
- * STEP 04 — The deep-dive: where the encryption keys come from, and what
+ * STEP 03 — The deep-dive: where the encryption keys come from, and what
  *           "configuring an account" actually put on-chain.
  *
- * You just watched a transfer FAIL against an unconfigured account (step 03),
- * and both Alice's and Bob's accounts got configured "quietly" along the way
- * (Alice in step 02, Bob in step 03). This step unpacks what those configure
- * transactions did — without sending anything new.
+ * Alice's account got configured "quietly" in step 02. This step unpacks what
+ * that configure transaction did — without sending anything new. (Bob will get
+ * the same treatment in step 04 — where you'll first watch a transfer to him
+ * FAIL because he is not configured yet.)
  *
  * WHAT THIS TEACHES
  *   1. Encryption keys are DERIVED, not stored. Each owner signs two short,
@@ -14,24 +14,24 @@
  *      (for the owner's fast-to-decrypt balance cache). Sign the same text
  *      again — in this script, in the web app, on another machine — and you
  *      get the same keys. Nothing secret is ever written down. We PROVE it
- *      here: re-derive Alice's and Bob's keys from scratch and match them
- *      against what steps 02/03 published on-chain.
+ *      here: re-derive Alice's keys from scratch and match them against what
+ *      step 02 published on-chain.
  *   2. Configuring an account publishes the owner's ElGamal PUBLIC key into
  *      the token account on-chain. That is what senders encrypt to — and it
- *      is exactly why the step 03 transfer to unconfigured Bob had nothing
- *      to encrypt to and failed.
+ *      is exactly why a transfer to an unconfigured account has nothing to
+ *      encrypt to and fails (step 04 demonstrates this live, with Bob).
  *   3. Configuration itself needs a ZK proof (pubkey validity) proving the
  *      ElGamal pubkey is well-formed — that proof ran inside the configure
- *      transactions you already watched in steps 02 and 03.
+ *      transaction you already watched in step 02.
  *
  * WHAT TO POINT AT
  *   The two signed message strings printed below (readable text — this is the
  *   same thing Phantom shows in the web app), and the side-by-side lines:
  *   the locally RE-DERIVED pubkey versus the pubkey stored ON-CHAIN. They
- *   match, for both owners, with no new transaction — determinism on display.
+ *   match, with no new transaction — determinism on display.
  *
  * RUN
- *   NODE_OPTIONS=--experimental-wasm-modules npx tsx workshop/04-configure-account.ts
+ *   NODE_OPTIONS=--experimental-wasm-modules npx tsx workshop/03-configure-account.ts
  */
 import { type Address, address, getBase58Decoder } from '@solana/kit';
 import { fetchToken } from '@solana-program/token-2022';
@@ -41,6 +41,7 @@ import {
   deriveCtKeys,
   explorerAddress,
   getCtExtension,
+  readState,
   requireState,
   rpc,
   signerFromPrivateKeyString,
@@ -74,29 +75,33 @@ async function verifyOwner(owner: OwnerState, mint: Address, configuredIn: strin
 }
 
 async function main() {
-  console.log('STEP 04 — account configuration, unpacked (devnet)\n');
+  console.log('STEP 03 — account configuration, unpacked (devnet)\n');
 
   const mint = address(requireState('mint', '01-create-mint.ts'));
   const alice = requireState('alice', '02-deposit-and-apply.ts');
-  const bob = requireState('bob', '03-confidential-transfer.ts');
+  const bob = readState().bob;
   console.log(`Mint: ${mint}`);
-  console.log('\nNo new transactions in this step — the actual configure transactions');
-  console.log("already ran: Alice's in step 02, Bob's in step 03. Here we re-derive");
-  console.log('both owners\' keys from scratch and check them against the chain.');
+  console.log('\nNo new transactions in this step — the actual configure transaction');
+  console.log("already ran: Alice's in step 02. Here we re-derive her keys from");
+  console.log('scratch and check them against the chain.');
 
   await verifyOwner(alice, mint, 'step 02');
-  await verifyOwner(bob, mint, 'step 03');
+  if (bob) {
+    await verifyOwner(bob, mint, 'step 04');
+  } else {
+    console.log("\nBob doesn't exist yet — step 04 creates him (and you'll watch a transfer to him fail before he's configured).");
+  }
 
-  console.log('\nBoth match. This is the whole configuration story:');
+  console.log('\nIt matches. This is the whole configuration story:');
   console.log('  - sign two readable messages -> deterministic ElGamal + AES keys');
   console.log('  - ConfigureAccount publishes the ElGamal PUBLIC key on the token account');
   console.log('    (guarded by a ZK pubkey-validity proof, bundled into that transaction)');
   console.log('  - from then on, anyone can encrypt transfers TO you by reading that key');
-  console.log('\nAnd it is why step 03 failed at first: no configure, no pubkey on the');
-  console.log('account, nothing to encrypt to. Step 05: Bob decrypts what he received.');
+  console.log('\nAnd no configure means no pubkey on the account and nothing to encrypt');
+  console.log('to — step 04 shows exactly that failure before Bob gets configured.');
 }
 
 main().catch(err => {
-  console.error('\nSTEP 04 FAILED:', err);
+  console.error('\nSTEP 03 FAILED:', err);
   process.exit(1);
 });

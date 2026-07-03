@@ -1,13 +1,13 @@
 /**
- * STEP 03 — Alice confidentially transfers tokens to Bob.
+ * STEP 04 — Alice confidentially transfers tokens to Bob.
  *
  * WHAT THIS TEACHES
  *   FIRST, the hook: Bob is brand new and has never configured his token
  *   account for confidential transfers. Alice tries to send to him anyway —
  *   and it fails before a single transaction goes out. Bob has no ElGamal
  *   key on-chain, so there is NOTHING to encrypt the amount to. This is the
- *   app's "recipient has not configured" error. Step 04 dives into the fix;
- *   here we configure Bob in one line and retry.
+ *   app's "recipient has not configured" error. Step 03 already dove into
+ *   the fix; here we configure Bob in one line and retry.
  *
  *   THEN, the transfer itself. It needs THREE zero-knowledge proofs:
  *     - EQUALITY proof:  Alice's new (encrypted) balance really equals
@@ -33,7 +33,7 @@
  *   right there in the instruction data.
  *
  * RUN (amount in tokens is optional, default 123)
- *   NODE_OPTIONS=--experimental-wasm-modules npx tsx workshop/03-confidential-transfer.ts [amount]
+ *   NODE_OPTIONS=--experimental-wasm-modules npx tsx workshop/04-confidential-transfer.ts [amount]
  */
 import { address } from '@solana/kit';
 import {
@@ -69,7 +69,7 @@ const SOL_FOR_FEES = 20_000_000n; // 0.02 SOL, so Bob could pay his own fees lat
 
 async function main() {
   const amount = RAW(Number(process.argv[2] ?? 123));
-  console.log(`STEP 03 — Alice confidentially sends ${ui(amount)} tokens to Bob (devnet)\n`);
+  console.log(`STEP 04 — Alice confidentially sends ${ui(amount)} tokens to Bob (devnet)\n`);
 
   const mint = address(requireState('mint', '01-create-mint.ts'));
   const alice = requireState('alice', '02-deposit-and-apply.ts');
@@ -127,13 +127,13 @@ async function main() {
     console.log(`    ${(err as Error).message}`);
     console.log('\n  Bob has no ElGamal key on-chain — there is nothing to encrypt to.');
     console.log('  This is exactly the app\'s "recipient has not configured" error.');
-    console.log('  The fix is a one-time account configuration — step 04 is the deep-dive.');
+    console.log('  The fix is a one-time account configuration — step 03 was the deep-dive.');
   }
   if (!attemptFailed) throw new Error('Expected the transfer to an unconfigured account to fail, but it succeeded.');
 
   // --- Fix: configure Bob's account, then retry -----------------------------
   const bobKeys = await deriveCtKeys(bob.signer, mint);
-  console.log("\nConfiguring Bob's confidential account (how this works is step 04):");
+  console.log("\nConfiguring Bob's confidential account (as explained in step 03):");
   await executePlan(
     tools,
     await getCreateConfidentialTransferAccountInstructionPlan({
@@ -181,7 +181,7 @@ async function main() {
   console.log(`\nAlice's available balance after: ${ui(after)} tokens (was ${ui(before)})`);
   console.log(`\nBob has been credited ${ui(amount)} tokens — but ONLY in his encrypted`);
   console.log('PENDING balance, and nothing on-chain says the amount. Not even Bob has');
-  console.log('looked yet. Step 04 unpacks the configuration that made this possible;');
+  console.log('looked yet. Step 03 unpacked the configuration that made this possible;');
   console.log('step 05: Bob decrypts.');
 
   writeState({
@@ -190,6 +190,6 @@ async function main() {
 }
 
 main().catch(err => {
-  console.error('\nSTEP 03 FAILED:', err);
+  console.error('\nSTEP 04 FAILED:', err);
   process.exit(1);
 });
