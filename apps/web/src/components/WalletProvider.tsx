@@ -1,6 +1,6 @@
 'use client';
 
-import { createContext, useCallback, useContext, useMemo, useState, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 import {
   AppProvider,
   getDefaultConfig,
@@ -15,11 +15,18 @@ import {
 import { createSolanaDevnet } from '@solana/connector/headless';
 import {
   address,
+  createSignableMessage,
+  type KeyPairSigner,
   type MessagePartialSigner,
   type SignatureBytes,
   type SignatureDictionary,
   type TransactionSigner,
 } from '@solana/kit';
+import {
+  createFreshLocalWallet,
+  exportLocalWalletSecretKey,
+  loadOrCreateLocalWallet,
+} from '@/lib/localWallet';
 
 const RPC_URL = process.env.NEXT_PUBLIC_SOLANA_RPC_URL || 'https://api.devnet.solana.com';
 
@@ -31,23 +38,29 @@ const connectorConfig = getDefaultConfig({
 });
 
 interface WalletContextType {
-  /** Connected wallet address (base58) or null */
+  /** Active wallet address (base58) or null */
   publicKey: string | null;
   isConnected: boolean;
   isConnecting: boolean;
-  /** Name of the connected wallet (e.g. 'Phantom') */
+  /** Name of the connected wallet (e.g. 'Phantom'), or 'Local key' */
   walletName: string | null;
   /** Icon URL / data URI of the connected wallet */
   walletIcon: string | null;
+  /** True when the browser-generated keypair is active (no extension) */
+  isLocalWallet: boolean;
   /** Open the wallet picker so the user can choose which wallet to connect */
   connect: () => Promise<void>;
   disconnect: () => Promise<void>;
-  /** Sign raw bytes with the connected wallet (auth login) */
+  /** Sign raw bytes with the active wallet (auth login) */
   signMessage: (message: Uint8Array) => Promise<Uint8Array>;
   /** Kit MessagePartialSigner for ElGamal/AES key derivation */
   messageSigner: MessagePartialSigner | null;
   /** Kit TransactionSigner used as fee payer / authority for instruction plans */
   transactionSigner: TransactionSigner | null;
+  /** Replace the local wallet with a brand new keypair */
+  newLocalWallet: () => Promise<void>;
+  /** Base58 64-byte secret key of the local wallet (for backup/import) */
+  exportLocalSecretKey: () => string | null;
 }
 
 const WalletContext = createContext<WalletContextType | null>(null);
@@ -69,7 +82,28 @@ function WalletContextBridge({ children }: { children: ReactNode }) {
   const { disconnect } = useDisconnectWallet();
   const { signer: kitSigner } = useKitTransactionSigner();
 
-  const publicKey = account ? String(account) : null;
+  // Browser-generated fallback keypair so the app works with no extension
+  // and no login: created on first visit, stored in localStorage, signs
+  // without prompts. An extension wallet takes over whenever it's connected.
+  const [localSigner, setLocalSigner] = useState<KeyPairSigner | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    loadOrCreateLocalWallet()
+      .then((signer) => {
+        if (!cancelled) setLocalSigner(signer);
+      })
+      .catch((error) => console.error('Failed to set up local wallet:', error));
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const isLocalWallet = !isConnected && !!localSigner;
+  const publicKey = account
+    ? String(account)
+    : isLocalWallet
+      ? localSigner!.address
+      : null;
 
   // The underlying wallet-standard wallet + account for the active session.
   const standardWallet = useMemo(
@@ -85,6 +119,14 @@ function WalletContextBridge({ children }: { children: ReactNode }) {
   const signMessage = useCallback(
     async (message: Uint8Array): Promise<Uint8Array> => {
       if (!standardWallet || !standardAccount) {
+        // Only the local wallet may sign here: while an extension session is
+        // active (even mid-handshake), falling back would derive wrong keys.
+        if (localSigner && !isConnected) {
+          const [dictionary] = await localSigner.signMessages([createSignableMessage(message)]);
+          const signature = dictionary?.[localSigner.address];
+          if (!signature) throw new Error('Local wallet returned no signature');
+          return new Uint8Array(signature);
+        }
         throw new Error('Wallet not connected');
       }
       const signFeature = standardWallet.features['solana:signMessage'] as
@@ -133,13 +175,13 @@ function WalletContextBridge({ children }: { children: ReactNode }) {
         );
       }
     },
-    [standardWallet, standardAccount]
+    [standardWallet, standardAccount, localSigner, isConnected]
   );
 
   // deriveCtKeys expects a kit MessagePartialSigner (wallets sign one message
   // at a time, so messages are signed sequentially).
   const messageSigner = useMemo<MessagePartialSigner | null>(() => {
-    if (!standardAccount) return null;
+    if (!standardAccount) return isConnected ? null : localSigner;
     const signerAddress = address(standardAccount.address);
     return {
       address: signerAddress,
@@ -154,11 +196,22 @@ function WalletContextBridge({ children }: { children: ReactNode }) {
         return dictionaries;
       },
     };
-  }, [standardAccount, signMessage]);
+  }, [standardAccount, signMessage, localSigner, isConnected]);
 
   const transactionSigner = useMemo(
-    () => (kitSigner as TransactionSigner | null) ?? null,
-    [kitSigner]
+    () =>
+      (kitSigner as TransactionSigner | null) ?? (isConnected ? null : localSigner),
+    [kitSigner, localSigner, isConnected]
+  );
+
+  const newLocalWallet = useCallback(async () => {
+    const signer = await createFreshLocalWallet();
+    setLocalSigner(signer);
+  }, []);
+
+  const exportLocalSecretKey = useCallback(
+    () => (localSigner ? exportLocalWalletSecretKey(localSigner.address) : null),
+    [localSigner]
   );
 
   // Never auto-pick a wallet: browsers like Brave register a built-in wallet
@@ -185,15 +238,18 @@ function WalletContextBridge({ children }: { children: ReactNode }) {
   const value = useMemo<WalletContextType>(
     () => ({
       publicKey,
-      isConnected,
+      isConnected: isConnected || isLocalWallet,
       isConnecting,
-      walletName,
-      walletIcon,
+      walletName: isLocalWallet ? 'Local key' : walletName,
+      walletIcon: isLocalWallet ? null : walletIcon,
+      isLocalWallet,
       connect,
       disconnect,
       signMessage,
       messageSigner,
       transactionSigner,
+      newLocalWallet,
+      exportLocalSecretKey,
     }),
     [
       publicKey,
@@ -201,11 +257,14 @@ function WalletContextBridge({ children }: { children: ReactNode }) {
       isConnecting,
       walletName,
       walletIcon,
+      isLocalWallet,
       connect,
       disconnect,
       signMessage,
       messageSigner,
       transactionSigner,
+      newLocalWallet,
+      exportLocalSecretKey,
     ]
   );
 

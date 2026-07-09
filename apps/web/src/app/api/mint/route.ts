@@ -9,15 +9,14 @@ import {
   mintTokensTo,
 } from '@/lib/server/mintTokens';
 
-// Starter amount minted to first-time visitors (whole tokens)
-const FAUCET_AMOUNT = 50;
-// The mint endpoints share a per-wallet cooldown; users who want more tokens
-// can keep minting through /api/mint, so the faucet only needs to stop spam.
-const COOLDOWN_MS = 60_000;
+// User-initiated minting: the requester picks the amount (capped) and the
+// server-side mint authority mints straight to their token account.
+const MAX_MINT_AMOUNT = 10_000;
+const COOLDOWN_MS = 15_000;
 
 export async function POST(request: Request) {
   try {
-    const { walletAddress } = await request.json();
+    const { walletAddress, amount } = await request.json();
 
     if (!walletAddress) {
       return NextResponse.json(
@@ -26,10 +25,24 @@ export async function POST(request: Request) {
       );
     }
 
+    const tokens = Math.floor(Number(amount));
+    if (!Number.isFinite(tokens) || tokens <= 0) {
+      return NextResponse.json(
+        { error: 'Amount must be a positive number of tokens' },
+        { status: 400 }
+      );
+    }
+    if (tokens > MAX_MINT_AMOUNT) {
+      return NextResponse.json(
+        { error: `Amount is capped at ${MAX_MINT_AMOUNT.toLocaleString()} tokens per request` },
+        { status: 400 }
+      );
+    }
+
     const waitMs = checkCooldown(walletAddress, COOLDOWN_MS);
     if (waitMs > 0) {
       return NextResponse.json(
-        { error: `Faucet cooldown: try again in ${Math.ceil(waitMs / 1000)}s.` },
+        { error: `Please wait ${Math.ceil(waitMs / 1000)}s between mints.` },
         { status: 429 }
       );
     }
@@ -41,27 +54,25 @@ export async function POST(request: Request) {
       rpc,
       authority,
       recipient: address(walletAddress),
-      tokens: FAUCET_AMOUNT,
+      tokens,
     });
 
     markRequest(walletAddress);
 
-    console.log(
-      `[Faucet] Minted ${FAUCET_AMOUNT} tokens${solToppedUp ? ' + SOL top-up' : ''} to ${walletAddress}: ${signature}`
-    );
+    console.log(`[Mint] Minted ${tokens} tokens to ${walletAddress}: ${signature}`);
 
     return NextResponse.json({
       success: true,
       signature,
-      amount: FAUCET_AMOUNT,
+      amount: tokens,
       solToppedUp,
       mint: CT_MINT,
       tokenAccount,
     });
   } catch (error) {
-    console.error('[Faucet] Error:', error);
+    console.error('[Mint] Error:', error);
     return NextResponse.json(
-      { error: error instanceof Error ? error.message : 'Faucet request failed' },
+      { error: error instanceof Error ? error.message : 'Mint request failed' },
       { status: 500 }
     );
   }

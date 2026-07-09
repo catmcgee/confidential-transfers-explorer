@@ -31,6 +31,16 @@ interface TransferProgress {
 // This is only an estimate used for the progress bar until the plan finishes.
 const ESTIMATED_TRANSFER_TRANSACTIONS = 5;
 
+// What each transaction in the transfer plan is doing, in order. The exact
+// count can vary, so anything past the list falls back to a generic label.
+const TRANSFER_TX_LABELS = [
+  'Verified the equality proof (new balance matches the ciphertext)',
+  'Verified the validity proof (amount encrypted to the right keys)',
+  'Wrote the range proof context (amount is in bounds, not negative)',
+  'Verified the range proof',
+  'Executed the transfer and closed the proof accounts',
+];
+
 const TRANSFER_FACTS = [
   'Zero-knowledge proofs let you prove a fact without revealing the secret itself.',
   'Confidential Transfer splits proof generation and transfer execution into separate steps.',
@@ -125,7 +135,8 @@ export function TransferModal({ isOpen, onClose, onTransferComplete }: TransferM
 
   // New state for operations
   const [selectedToken, setSelectedToken] = useState<TokenAccount | null>(null);
-  const [operation, setOperation] = useState<'deposit' | 'apply' | 'transfer' | null>(null);
+  const [operation, setOperation] = useState<'mint' | 'deposit' | 'apply' | 'transfer' | null>(null);
+  const [mintAmount, setMintAmount] = useState('');
   const [depositAmount, setDepositAmount] = useState('');
   const [transferAmount, setTransferAmount] = useState('');
   const [recipientAddress, setRecipientAddress] = useState('');
@@ -699,15 +710,60 @@ export function TransferModal({ isOpen, onClose, onTransferComplete }: TransferM
       }
 
       setFaucetSuccess(true);
-      // Refresh token accounts after a short delay
-      setTimeout(() => {
-        fetchTokenAccounts();
-      }, 2000);
+      // The faucet waits for on-chain confirmation, so refresh right away
+      await fetchTokenAccounts();
     } catch (err) {
       console.error('Faucet request failed:', err);
       setFaucetError(err instanceof Error ? err.message : 'Failed to request tokens');
     } finally {
       setIsRequestingTokens(false);
+    }
+  };
+
+  // Mint more tokens to the connected wallet (server-side mint authority signs)
+  const handleMint = async () => {
+    if (!publicKey || !selectedToken || !mintAmount) return;
+
+    setIsProcessing(true);
+    setOperationError(null);
+
+    try {
+      const response = await fetch('/api/mint', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ walletAddress: publicKey, amount: parseFloat(mintAmount) })
+      });
+
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.error || 'Mint request failed');
+      }
+
+      if (onTransferComplete) {
+        onTransferComplete({
+          signature: data.signature,
+          instructionType: 'MintTo',
+          mint: selectedToken.mint,
+          sourceOwner: null,
+          destOwner: publicKey,
+          sourceTokenAccount: null,
+          destTokenAccount: data.tokenAccount ?? selectedToken.address,
+          amount: String(data.amount),
+        });
+      }
+
+      try {
+        await fetchTokenAccounts();
+      } catch (refreshErr) {
+        console.warn('Post-mint token refresh failed (mint itself succeeded):', refreshErr);
+      }
+      setMintAmount('');
+      setOperation(null);
+    } catch (err) {
+      console.error('Mint failed:', err);
+      setOperationError(err instanceof Error ? err.message : 'Mint failed');
+    } finally {
+      setIsProcessing(false);
     }
   };
 
@@ -917,19 +973,16 @@ export function TransferModal({ isOpen, onClose, onTransferComplete }: TransferM
 
           <div className="p-5 max-h-[70vh] overflow-y-auto">
             {!isConnected ? (
+              // Rare: the local wallet is normally ready before the modal opens
               <div className="text-center py-4">
-                <div className="w-10 h-10 mx-auto mb-3 rounded-full bg-zinc-800 flex items-center justify-center">
-                  <svg className="w-5 h-5 text-zinc-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
-                  </svg>
-                </div>
-                <p className="text-xs text-zinc-500 mb-4">Connect wallet to view your tokens</p>
+                <div className="w-6 h-6 mx-auto mb-3 border-2 border-zinc-700 border-t-emerald-500 rounded-full animate-spin" />
+                <p className="text-xs text-zinc-500 mb-4">Setting up your wallet...</p>
                 <button
                   onClick={handleConnect}
                   disabled={isConnecting}
                   className="px-4 py-2 text-xs font-medium text-white bg-emerald-600 hover:bg-emerald-500 disabled:bg-emerald-800 rounded transition-colors"
                 >
-                  {isConnecting ? 'Connecting...' : 'Connect Wallet'}
+                  {isConnecting ? 'Connecting...' : 'Connect a wallet instead'}
                 </button>
               </div>
             ) : isLoadingTokens ? (
@@ -955,8 +1008,10 @@ export function TransferModal({ isOpen, onClose, onTransferComplete }: TransferM
                   </svg>
                 </div>
                 <p className="text-sm text-zinc-300 mb-2">No confidential-enabled tokens found</p>
-                <p className="text-[10px] text-zinc-500 mb-4">
-                  Get test tokens to try confidential transfers
+                <p className="text-[10px] text-zinc-500 mb-4 max-w-xs mx-auto">
+                  The faucet mints 50 test tokens straight to your wallet (and
+                  covers a little devnet SOL for fees). You can mint more any
+                  time after that.
                 </p>
 
                 {faucetSuccess ? (
@@ -1081,6 +1136,16 @@ export function TransferModal({ isOpen, onClose, onTransferComplete }: TransferM
                               {/* Operation buttons */}
                               <div className="flex gap-2 mb-3">
                                 <button
+                                  onClick={(e) => { e.stopPropagation(); setOperation('mint'); setOperationError(null); }}
+                                  className={`flex-1 px-2 py-1.5 text-[10px] rounded transition-colors ${
+                                    operation === 'mint'
+                                      ? 'bg-amber-600 text-white'
+                                      : 'bg-zinc-700 text-zinc-300 hover:bg-zinc-600'
+                                  }`}
+                                >
+                                  Mint
+                                </button>
+                                <button
                                   onClick={(e) => { e.stopPropagation(); setOperation('deposit'); setOperationError(null); }}
                                   className={`flex-1 px-2 py-1.5 text-[10px] rounded transition-colors ${
                                     operation === 'deposit'
@@ -1113,9 +1178,40 @@ export function TransferModal({ isOpen, onClose, onTransferComplete }: TransferM
                               </div>
 
                               {/* Operation forms */}
+                              {operation === 'mint' && (
+                                <div className="p-2 bg-amber-500/10 border border-amber-500/20 rounded">
+                                  <div className="text-[10px] text-amber-400 mb-1">Mint new tokens to your public balance</div>
+                                  <p className="text-[10px] text-zinc-500 mb-2 leading-relaxed">
+                                    This is a devnet test token, so the mint authority signs a
+                                    MintTo for you server-side. Minted tokens land in your public
+                                    balance — deposit them to make them confidential.
+                                  </p>
+                                  <input
+                                    type="number"
+                                    placeholder="Amount (max 10,000)"
+                                    value={mintAmount}
+                                    onChange={(e) => setMintAmount(e.target.value)}
+                                    onClick={(e) => e.stopPropagation()}
+                                    className="w-full px-2 py-1.5 text-xs bg-zinc-800 border border-zinc-700 rounded text-zinc-200 mb-2"
+                                  />
+                                  <button
+                                    onClick={(e) => { e.stopPropagation(); handleMint(); }}
+                                    disabled={isProcessing || !mintAmount}
+                                    className="w-full px-2 py-1.5 text-[10px] bg-amber-600 hover:bg-amber-500 disabled:bg-amber-800 text-white rounded transition-colors"
+                                  >
+                                    {isProcessing ? 'Minting...' : 'Mint Tokens'}
+                                  </button>
+                                </div>
+                              )}
+
                               {operation === 'deposit' && (
                                 <div className="p-2 bg-blue-500/10 border border-blue-500/20 rounded">
-                                  <div className="text-[10px] text-blue-400 mb-2">Deposit from public to pending balance</div>
+                                  <div className="text-[10px] text-blue-400 mb-1">Deposit from public to pending balance</div>
+                                  <p className="text-[10px] text-zinc-500 mb-2 leading-relaxed">
+                                    Moves tokens from your public balance into your encrypted
+                                    pending balance. The amount is still visible on-chain here —
+                                    it&apos;s the last step where it appears in plaintext.
+                                  </p>
                                   <input
                                     type="number"
                                     placeholder="Amount"
@@ -1136,7 +1232,13 @@ export function TransferModal({ isOpen, onClose, onTransferComplete }: TransferM
 
                               {operation === 'apply' && (
                                 <div className="p-2 bg-purple-500/10 border border-purple-500/20 rounded">
-                                  <div className="text-[10px] text-purple-400 mb-2">Move pending balance to confidential balance</div>
+                                  <div className="text-[10px] text-purple-400 mb-1">Move pending balance to confidential balance</div>
+                                  <p className="text-[10px] text-zinc-500 mb-2 leading-relaxed">
+                                    Deposits and incoming transfers land as &quot;pending&quot; and
+                                    can&apos;t be spent yet. This decrypts your pending balance
+                                    locally, adds it to your spendable balance, and stores a
+                                    re-encrypted total only you can read.
+                                  </p>
                                   {decryptedPendingBalance !== null && decryptedPendingBalance > 0n && (
                                     <div className="text-[10px] text-zinc-400 mb-2">
                                       Pending: {(Number(decryptedPendingBalance) / Math.pow(10, token.decimals)).toFixed(token.decimals)}
@@ -1179,6 +1281,12 @@ export function TransferModal({ isOpen, onClose, onTransferComplete }: TransferM
                                         {transferProgress.currentTransaction} of ~{transferProgress.totalTransactions} transactions confirmed
                                       </div>
 
+                                      {transferProgress.step === 'executing_transfer' && transferProgress.currentTransaction > 0 && (
+                                        <div className="text-[10px] text-zinc-400">
+                                          {TRANSFER_TX_LABELS[transferProgress.currentTransaction - 1] ?? 'Finalizing...'}
+                                        </div>
+                                      )}
+
                                       {transferProgress.step !== 'complete' && transferProgress.step !== 'error' && funFact && (
                                         <div className="text-[10px] text-zinc-600 italic mt-1 transition-all duration-500">
                                           {funFact}
@@ -1220,7 +1328,13 @@ export function TransferModal({ isOpen, onClose, onTransferComplete }: TransferM
                                   ) : (
                                     /* Input form */
                                     <>
-                                      <div className="text-[10px] text-emerald-400 mb-2">Send confidential transfer</div>
+                                      <div className="text-[10px] text-emerald-400 mb-1">Send confidential transfer</div>
+                                      <p className="text-[10px] text-zinc-500 mb-2 leading-relaxed">
+                                        The amount is encrypted to your key and the recipient&apos;s, so it
+                                        never appears on-chain. Three zero-knowledge proofs — equality,
+                                        validity, and range — convince the token program the encrypted
+                                        math checks out.
+                                      </p>
 
                                       {/* Recipient input */}
                                       <div className="mb-2">
@@ -1309,9 +1423,9 @@ export function TransferModal({ isOpen, onClose, onTransferComplete }: TransferM
                                           </button>
 
                                           <div className="mt-2 p-2 bg-emerald-500/10 border border-emerald-500/20 rounded text-[10px] text-emerald-400/80">
-                                            <strong>Note:</strong> Confidential transfers on devnet run as multiple
-                                            transactions — ZK proofs are verified into context-state accounts before
-                                            the transfer executes.
+                                            <strong>Note:</strong> The proofs are too big for one transaction, so
+                                            each is verified into its own on-chain account first (~5 transactions
+                                            total), then the transfer executes and the proof accounts are closed.
                                           </div>
                                         </>
                                       )}
@@ -1361,6 +1475,12 @@ export function TransferModal({ isOpen, onClose, onTransferComplete }: TransferM
                         </div>
 
                         <div className="pt-2 border-t border-zinc-700/50">
+                          <p className="text-[10px] text-zinc-500 mb-2 leading-relaxed">
+                            Configuring derives an ElGamal keypair and an AES key from your
+                            wallet key, registers the public key on this token account, and
+                            proves on-chain that the key is well-formed. After this the account
+                            can hold an encrypted balance.
+                          </p>
                           {configureError?.address === token.address && (
                             <div className="mb-2 p-2 bg-red-500/10 border border-red-500/20 rounded text-[10px] text-red-400">
                               {configureError.message}
