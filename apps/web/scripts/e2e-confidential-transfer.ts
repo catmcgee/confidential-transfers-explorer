@@ -7,9 +7,12 @@
  *   3. Create + configure confidential token accounts for owners A and B.
  *   4. Mint 1000 tokens (public) to A.
  *   5. Deposit 500 into A's confidential pending balance, apply pending.
- *   6. Confidentially transfer 123 tokens A -> B (context-state proof flow).
+ *   6. Confidentially transfer 123 tokens A -> B in ONE v1 transaction.
  *   7. Apply pending on B, decrypt B's available balance, assert == 123.
- *   8. Withdraw 100 from B's confidential balance, assert public balance.
+ *   8. Withdraw 100 from B's confidential balance in ONE v1 transaction.
+
+All transactions are version 1 (4096-byte limit), which is what lets every
+proof, the transfer, and the context-state cleanup fit in one transaction.
  *
  * MUST run under Node (not Bun) with WASM ESM support:
  *   NODE_OPTIONS=--experimental-wasm-modules npx tsx apps/web/scripts/e2e-confidential-transfer.ts
@@ -23,6 +26,7 @@ import {
   type Instruction,
   type KeyPairSigner,
   type Signature,
+  type TransactionPlan,
   type TransactionPlanner,
   type TransactionPlanExecutor,
   type InstructionPlan,
@@ -32,6 +36,9 @@ import {
   createTransactionMessage,
   createTransactionPlanner,
   createTransactionPlanExecutor,
+  estimateAndSetResourceLimitsFactory,
+  estimateResourceLimitsFactory,
+  fillTransactionMessageProvisoryResourceLimits,
   generateKeyPairSigner,
   getBase58Encoder,
   getBase64EncodedWireTransaction,
@@ -209,19 +216,28 @@ function createPlannerAndExecutor(payer: KeyPairSigner): {
   planner: TransactionPlanner;
   executor: TransactionPlanExecutor;
 } {
+  // v1 messages get a ZERO compute / loaded-data budget unless set, so the
+  // planner reserves provisory limits and the executor fills them in by
+  // simulating just before signing.
   const planner = createTransactionPlanner({
     createTransactionMessage: () =>
       pipe(
-        createTransactionMessage({ version: 0 }),
+        createTransactionMessage({ version: 1 }),
         message => setTransactionMessageFeePayerSigner(payer, message),
+        fillTransactionMessageProvisoryResourceLimits,
       ),
   });
+
+  const estimateAndSetResourceLimits = estimateAndSetResourceLimitsFactory(
+    estimateResourceLimitsFactory({ rpc }),
+  );
 
   const executor = createTransactionPlanExecutor({
     executeTransactionMessage: async (_context, transactionMessage) => {
       const { value: latestBlockhash } = await rpc.getLatestBlockhash().send();
       const withLifetime = setTransactionMessageLifetimeUsingBlockhash(latestBlockhash, transactionMessage);
-      const transaction = await signTransactionMessageWithSigners(withLifetime);
+      const withLimits = await estimateAndSetResourceLimits(withLifetime);
+      const transaction = await signTransactionMessageWithSigners(withLimits);
       const signature = getSignatureFromTransaction(transaction);
       await rpc
         .sendTransaction(getBase64EncodedWireTransaction(transaction), { encoding: 'base64' })
@@ -229,20 +245,26 @@ function createPlannerAndExecutor(payer: KeyPairSigner): {
       console.log(`  sent ${explorerTx(signature)}`);
       await confirmSignature(signature);
       await sleep(TX_DELAY_MS);
-      return transaction;
+      return { signature, transaction };
     },
   });
 
   return { planner, executor };
 }
 
+function countTransactions(plan: TransactionPlan): number {
+  return plan.kind === 'single' ? 1 : plan.plans.reduce((total, child) => total + countTransactions(child), 0);
+}
+
+/** Plans and executes an instruction plan, returning how many transactions it took. */
 async function executePlan(
   planner: TransactionPlanner,
   executor: TransactionPlanExecutor,
   instructionPlan: InstructionPlan,
-): Promise<void> {
+): Promise<number> {
   const transactionPlan = await planner(instructionPlan);
   await executor(transactionPlan);
+  return countTransactions(transactionPlan);
 }
 
 async function executeInstructions(
@@ -459,7 +481,7 @@ async function main() {
   pass('deposited 500 and applied pending balance on A');
 
   // --- Step 6: confidential transfer A -> B ---------------------------------
-  step('6. Confidential transfer 123 tokens A -> B (context-state proofs, multiple transactions)');
+  step('6. Confidential transfer 123 tokens A -> B (single v1 transaction)');
   const tokenB = await fetchToken(rpc, ataB);
   const transferPlan = await getConfidentialTransferInstructionPlan({
     sourceToken: ataA,
@@ -474,7 +496,8 @@ async function main() {
     payer,
     rpc,
   });
-  await executePlan(planner, executor, transferPlan);
+  const transferTxCount = await executePlan(planner, executor, transferPlan);
+  assert(transferTxCount === 1, `confidential transfer fits in one transaction (took ${transferTxCount})`);
 
   tokenA = await fetchToken(rpc, ataA);
   const availableAAfterTransfer = decryptAvailableBalance(tokenA.data, keysA.aeKey);
@@ -482,7 +505,7 @@ async function main() {
     availableAAfterTransfer === DEPOSIT_AMOUNT - TRANSFER_AMOUNT,
     `A available balance == 377 after transfer (got ${availableAAfterTransfer})`,
   );
-  pass('confidential transfer of 123 tokens A -> B executed');
+  pass('confidential transfer of 123 tokens A -> B executed in one transaction');
 
   // --- Step 7: apply pending on B and verify decrypted balance --------------
   step('7. Apply pending balance on B and decrypt');
@@ -518,7 +541,8 @@ async function main() {
     payer,
     rpc,
   });
-  await executePlan(planner, executor, withdrawPlan);
+  const withdrawTxCount = await executePlan(planner, executor, withdrawPlan);
+  assert(withdrawTxCount === 1, `confidential withdraw fits in one transaction (took ${withdrawTxCount})`);
 
   tokenBAccount = await fetchToken(rpc, ataB);
   const publicBAfter = tokenBAccount.data.amount;
@@ -531,7 +555,7 @@ async function main() {
     availableBAfterWithdraw === TRANSFER_AMOUNT - WITHDRAW_AMOUNT,
     `B available balance == 23 tokens after withdraw (got ${availableBAfterWithdraw})`,
   );
-  pass('withdrew 100 tokens from B back to public balance');
+  pass('withdrew 100 tokens from B back to public balance in one transaction');
 
   // --- Summary ---------------------------------------------------------------
   console.log('\n========================================');

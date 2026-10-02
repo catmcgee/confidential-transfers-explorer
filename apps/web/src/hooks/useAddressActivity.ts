@@ -53,25 +53,21 @@ export function useAddressActivity(options: UseAddressActivityOptions): UseAddre
 
   const fetchActivity = useCallback(
     async (currentCursor?: string) => {
-      try {
-        const params = new URLSearchParams();
-        params.set('limit', limit.toString());
-        params.set('type', type);
-        if (currentCursor) {
-          params.set('cursor', currentCursor);
-        }
-
-        const response = await fetch(`/api/address/${address}?${params}`);
-        const data = await response.json();
-
-        if (!data.success) {
-          throw new Error(data.error || 'Failed to fetch activity');
-        }
-
-        return data.data;
-      } catch (err) {
-        throw err;
+      const params = new URLSearchParams();
+      params.set('limit', limit.toString());
+      params.set('type', type);
+      if (currentCursor) {
+        params.set('cursor', currentCursor);
       }
+
+      const response = await fetch(`/api/address/${address}?${params}`);
+      const data = await response.json();
+
+      if (!data.success) {
+        throw new Error(data.error || 'Failed to fetch activity');
+      }
+
+      return data.data;
     },
     [address, limit, type]
   );

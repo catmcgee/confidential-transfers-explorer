@@ -57,28 +57,24 @@ export function useFeed(options: UseFeedOptions = {}): UseFeedResult {
 
   const fetchFeed = useCallback(
     async (currentCursor?: string) => {
-      try {
-        const params = new URLSearchParams();
-        params.set('limit', limit.toString());
-        params.set('type', type);
-        if (currentCursor) {
-          params.set('cursor', currentCursor);
-        }
-        if (address) {
-          params.set('address', address);
-        }
-
-        const response = await fetch(`/api/feed?${params}`);
-        const data = await response.json();
-
-        if (!data.success) {
-          throw new Error(data.error || 'Failed to fetch feed');
-        }
-
-        return data.data;
-      } catch (err) {
-        throw err;
+      const params = new URLSearchParams();
+      params.set('limit', limit.toString());
+      params.set('type', type);
+      if (currentCursor) {
+        params.set('cursor', currentCursor);
       }
+      if (address) {
+        params.set('address', address);
+      }
+
+      const response = await fetch(`/api/feed?${params}`);
+      const data = await response.json();
+
+      if (!data.success) {
+        throw new Error(data.error || 'Failed to fetch feed');
+      }
+
+      return data.data;
     },
     [limit, type, address]
   );

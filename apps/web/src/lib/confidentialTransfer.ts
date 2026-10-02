@@ -2,10 +2,12 @@
  * Confidential Transfer operations for Token-2022.
  *
  * Built on the official confidential-transfer helpers from
- * `@solana-program/token-2022/confidential` (instruction plans that handle
- * the multi-transaction context-state proof flow required on devnet) and
- * `@solana/zk-sdk` for ElGamal/AES cryptography.
+ * `@solana-program/token-2022/confidential` (instruction plans that verify
+ * the ZK proofs into context-state accounts) and `@solana/zk-sdk` for
+ * ElGamal/AES cryptography. Plans are packed into version 1 transactions,
+ * whose 4096-byte limit fits a whole transfer or withdraw in one transaction.
  */
+
 
 import {
   address,
@@ -13,6 +15,9 @@ import {
   createTransactionMessage,
   createTransactionPlanExecutor,
   createTransactionPlanner,
+  estimateAndSetResourceLimitsFactory,
+  estimateResourceLimitsFactory,
+  fillTransactionMessageProvisoryResourceLimits,
   getBase58Decoder,
   getBase64EncodedWireTransaction,
   isSolanaError,
@@ -37,6 +42,7 @@ import {
   fetchToken,
   getConfidentialDepositInstruction,
 } from '@solana-program/token-2022';
+import { legacyKeyBytesFromSignature } from './ctKeyDerivation';
 
 // The ZK SDK and the confidential helpers load WebAssembly, so they are
 // imported dynamically (Next.js webpack handles the WASM at bundle time).
@@ -104,8 +110,7 @@ async function signSeedText(signer: MessagePartialSigner, text: string): Promise
 /**
  * Derives the ElGamal keypair and AES key for an `(owner, mint)` pair from
  * wallet signatures: the signer signs a deterministic, domain-separated
- * message and the Ed25519 signature seeds the key (via the ZK SDK's
- * `fromSignature`).
+ * message and the Ed25519 signature seeds the key.
  *
  * The signed messages are human-readable UTF-8 text
  * (`ElGamalSecretKey:<owner>:<mint>`) rather than the raw-byte message the
@@ -128,11 +133,13 @@ export async function deriveCtKeys(
   const mint = address(mintAddress);
 
   const elgamalSignature = await signSeedText(signer, `ElGamalSecretKey:${owner}:${mint}`);
-  const elgamalKeypair = zk.ElGamalKeypair.fromSignature(elgamalSignature);
-  const elgamalSecretKey = elgamalKeypair.secret();
+  const elgamalSecretKey = zk.ElGamalSecretKey.fromBytes(
+    legacyKeyBytesFromSignature(elgamalSignature).elgamalSecret
+  );
+  const elgamalKeypair = zk.ElGamalKeypair.fromSecretKey(elgamalSecretKey);
 
   const aeSignature = await signSeedText(signer, `AeKey:${owner}:${mint}`);
-  const aesKey = zk.AeKey.fromSignature(aeSignature);
+  const aesKey = zk.AeKey.fromBytes(legacyKeyBytesFromSignature(aeSignature).aesKey);
 
   return {
     elgamalKeypair,
@@ -185,7 +192,7 @@ export function parseElGamalPubkeyFromAccountInfo(ctAccountState: {
 }
 
 // =============================================================================
-// Instruction Plans (multi-transaction flows)
+// Instruction Plans
 // =============================================================================
 
 /**
@@ -261,9 +268,8 @@ export async function createApplyPendingBalanceInstruction(input: {
  *
  * The helper splits the amount into lo/hi halves, generates the three
  * required ZK proofs (equality, grouped-ciphertext validity, batched range),
- * verifies each into a context-state account across multiple transactions,
- * executes the transfer, and closes the context-state accounts — the flow
- * required on devnet where all proofs cannot fit in one transaction.
+ * verifies each into a context-state account, executes the transfer, and
+ * closes the context-state accounts — all in a single v1 transaction.
  */
 export async function createTransferPlan(input: {
   rpc: CtRpc;
@@ -294,7 +300,6 @@ export async function createTransferPlan(input: {
     amount: input.amount,
     sourceElgamalKeypair: input.keys.elgamalKeypair,
     aesKey: input.keys.aesKey,
-    proofMode: 'context-state',
     payer: input.payer,
     rpc: input.rpc,
   });
@@ -302,7 +307,8 @@ export async function createTransferPlan(input: {
 
 /**
  * Plan that withdraws tokens from the confidential available balance back
- * to the public balance (equality + range proofs via context-state accounts).
+ * to the public balance (equality + range proofs via context-state accounts,
+ * in a single v1 transaction).
  */
 export async function createWithdrawPlan(input: {
   rpc: CtRpc;
@@ -331,7 +337,6 @@ export async function createWithdrawPlan(input: {
     decimals: mintAccount.data.decimals,
     elgamalKeypair: input.keys.elgamalKeypair,
     aesKey: input.keys.aesKey,
-    proofMode: 'context-state',
     payer: input.payer,
     rpc: input.rpc,
   });
@@ -364,6 +369,8 @@ async function confirmSignature(rpc: CtRpc, signature: Signature): Promise<void>
   }
   throw new Error(`Timed out waiting for confirmation of ${signature}`);
 }
+
+export type SupportedTransactionVersion = 0 | 1;
 
 export interface ExecutePlanResult {
   signatures: Signature[];
@@ -419,8 +426,17 @@ function collectFailureMessages(root: unknown): string[] {
 }
 
 /**
- * Plans and executes an instruction plan, sending each transaction
+ * Plans an instruction plan into transactions and executes them, sending
  * sequentially and waiting for confirmation between them.
+ *
+ * Version 1 transactions (the default) have a 4096-byte limit, so a whole
+ * confidential transfer or withdrawal fits in one transaction. Pass
+ * `transactionVersion: 0` for wallets that cannot sign v1 yet; the planner
+ * then splits the same plan across several 1232-byte transactions.
+ *
+ * Resource limits are estimated by simulating each message just before
+ * signing. This matters most for v1, which budgets zero compute units and
+ * zero loaded-account bytes unless they are set explicitly.
  *
  * The fee payer may be a wallet-backed `TransactionSendingSigner` (the
  * wallet signs and submits) or a regular keypair signer (the transaction is
@@ -430,18 +446,24 @@ export async function executeInstructionPlan(input: {
   plan: InstructionPlan;
   rpc: CtRpc;
   feePayer: TransactionSigner;
+  transactionVersion?: SupportedTransactionVersion;
   onProgress?: (info: { signature: Signature; index: number }) => void;
 }): Promise<ExecutePlanResult> {
-  const { plan, rpc, feePayer, onProgress } = input;
+  const { plan, rpc, feePayer, transactionVersion = 1, onProgress } = input;
   const base58Decoder = getBase58Decoder();
 
   const planner = createTransactionPlanner({
     createTransactionMessage: () =>
       pipe(
-        createTransactionMessage({ version: 0 }),
-        (m) => setTransactionMessageFeePayerSigner(feePayer, m)
+        createTransactionMessage({ version: transactionVersion }),
+        (m) => setTransactionMessageFeePayerSigner(feePayer, m),
+        fillTransactionMessageProvisoryResourceLimits
       ),
   });
+
+  const estimateAndSetResourceLimits = estimateAndSetResourceLimitsFactory(
+    estimateResourceLimitsFactory({ rpc })
+  );
 
   const transactionPlan = await planner(plan);
 
@@ -451,9 +473,8 @@ export async function executeInstructionPlan(input: {
       const { value: latestBlockhash } = await rpc
         .getLatestBlockhash({ commitment: 'confirmed' })
         .send();
-      const messageWithLifetime = setTransactionMessageLifetimeUsingBlockhash(
-        latestBlockhash,
-        message
+      const messageWithLifetime = await estimateAndSetResourceLimits(
+        setTransactionMessageLifetimeUsingBlockhash(latestBlockhash, message)
       );
 
       let signature: Signature;
@@ -477,7 +498,7 @@ export async function executeInstructionPlan(input: {
       await confirmSignature(rpc, signature);
       signatures.push(signature);
       onProgress?.({ signature, index: signatures.length - 1 });
-      return signature;
+      return { signature };
     },
   });
 

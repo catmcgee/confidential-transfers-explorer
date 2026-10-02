@@ -25,6 +25,8 @@ import {
   createSolanaRpc,
   createSolanaRpcSubscriptions,
   createTransactionMessage,
+  estimateAndSetResourceLimitsFactory,
+  estimateResourceLimitsFactory,
   getAddressEncoder,
   getSignatureFromTransaction,
   pipe,
@@ -117,16 +119,20 @@ async function main() {
   const rpc = createSolanaRpc(RPC_URL);
   const rpcSubscriptions = createSolanaRpcSubscriptions(toWebSocketUrl(RPC_URL));
   const sendAndConfirm = sendAndConfirmTransactionFactory({ rpc, rpcSubscriptions });
+  // v1 transactions must carry explicit resource limits: estimate them by simulating.
+  const estimateAndSetResourceLimits = estimateAndSetResourceLimitsFactory(estimateResourceLimitsFactory({ rpc }));
 
   async function sendInstructions(instructions: Instruction[]): Promise<string> {
     const { value: latestBlockhash } = await rpc.getLatestBlockhash({ commitment: 'confirmed' }).send();
     const transactionMessage = pipe(
-      createTransactionMessage({ version: 0 }),
+      createTransactionMessage({ version: 1 }),
       (tx) => setTransactionMessageFeePayerSigner(faucetSigner, tx),
       (tx) => setTransactionMessageLifetimeUsingBlockhash(latestBlockhash, tx),
       (tx) => appendTransactionMessageInstructions(instructions, tx)
     );
-    const signedTransaction = await signTransactionMessageWithSigners(transactionMessage);
+    const signedTransaction = await signTransactionMessageWithSigners(
+      await estimateAndSetResourceLimits(transactionMessage)
+    );
     assertIsTransactionWithBlockhashLifetime(signedTransaction);
     await sendAndConfirm(signedTransaction, { commitment: 'confirmed', skipPreflight: true });
     return getSignatureFromTransaction(signedTransaction);

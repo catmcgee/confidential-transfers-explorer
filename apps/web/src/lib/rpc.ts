@@ -501,7 +501,7 @@ export async function fetchTransactionDetailFromRpc(
   try {
     const txData = await rpcCall<RpcTransactionData | null>('getTransaction', [
       sig,
-      { encoding: 'jsonParsed', maxSupportedTransactionVersion: 0, commitment: 'confirmed' },
+      { encoding: 'jsonParsed', maxSupportedTransactionVersion: 1, commitment: 'confirmed' },
     ]);
 
     if (!txData) {

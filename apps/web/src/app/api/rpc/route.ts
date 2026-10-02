@@ -4,7 +4,7 @@ import { NextResponse } from 'next/server';
 //
 // The browser can't use the private keyed RPC directly (the key would be
 // exposed), and the public devnet endpoint rate-limits bursty flows like
-// multi-transaction confidential transfers — its 429s lack CORS headers,
+// confidential transfers (proof generation, simulation, polling) — its 429s lack CORS headers,
 // surfacing in the browser as opaque "Failed to fetch" errors. Proxying
 // through our origin gives the client the private RPC's throughput with no
 // CORS in play.

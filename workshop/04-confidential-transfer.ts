@@ -17,19 +17,20 @@
  *     - RANGE proof:     the amount and remaining balance are non-negative
  *                        (no sending -5 tokens to print 5 for yourself).
  *
- *   Why several transactions? A Solana transaction maxes out at 1232 bytes;
- *   the range proof ALONE is bigger than that. So each proof is verified
- *   up-front into a CONTEXT-STATE ACCOUNT — a tiny scratch account that
- *   records "this proof checked out". The actual Transfer instruction then
- *   just points at the three context accounts. Afterwards they are closed
- *   and their rent refunded to the payer. Scratch space, not state.
+ *   It all goes out as ONE version 1 transaction. Legacy/v0 transactions
+ *   max out at 1232 bytes — smaller than the range proof alone — so this
+ *   used to take ~5. v1 transactions allow 4096 bytes, and the whole
+ *   transfer is ~2.9 KB. Inside it, each proof is verified into a
+ *   CONTEXT-STATE ACCOUNT — a tiny scratch account that records "this proof
+ *   checked out". The Transfer instruction points at the three context
+ *   accounts, and then they are closed and their rent refunded to the payer,
+ *   all atomically. Scratch space, not state.
  *
  * WHAT TO POINT AT
  *   The failed first attempt — read the error aloud, it is the same
- *   "recipient has not configured" moment as in the app. Then each
- *   transaction printed below is labeled with what its instructions do —
- *   read them aloud. Then open the LAST transfer transaction in the explorer:
- *   no amount anywhere. Compare with a normal transfer where the amount is
+ *   "recipient has not configured" moment as in the app. Then the transfer
+ *   transaction printed below lists every instruction it contains — read
+ *   them aloud. Open it in the explorer: no amount anywhere. Compare with a normal transfer where the amount is
  *   right there in the instruction data.
  *
  * RUN (amount in tokens is optional, default 123)
@@ -169,11 +170,10 @@ async function main() {
     rpc,
   });
 
-  console.log('\nExecuting. Watch the transactions — this is why there are several:');
-  console.log('  1232-byte tx limit vs proofs that are each hundreds of bytes (the range');
-  console.log('  proof alone is ~1.5 KB). Each proof is verified into a context-state');
-  console.log('  scratch account first; the transfer references them; then they are');
-  console.log('  closed and the rent comes back.');
+  console.log('\nExecuting. Watch: it is ONE transaction. A version 1 transaction holds');
+  console.log('  4096 bytes (legacy/v0: 1232), so all three proofs fit. Each is verified');
+  console.log('  into a context-state scratch account; the transfer references them; then');
+  console.log('  they are closed and the rent comes back — all in the same transaction.');
   await executePlan(tools, plan);
 
   const afterToken = await fetchToken(rpc, address(alice.tokenAccount), { commitment: 'confirmed' });

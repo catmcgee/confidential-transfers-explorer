@@ -39,8 +39,8 @@ conf-transfers-explorer/
 
 - **Frontend**: Next.js 15, React 19, Tailwind CSS
 - **Backend**: Next.js API Routes (stateless, RPC-only)
-- **Solana**: `@solana/kit` 6.x, `@solana-program/token-2022` 0.12.x
-- **ZK Proofs**: `@solana/zk-sdk` 0.4.x (WASM) + the confidential-transfer
+- **Solana**: `@solana/kit` 8.x (version 1 transactions), `@solana-program/token-2022` 0.19.x
+- **ZK Proofs**: `@solana/zk-sdk` 0.5.x (WASM) + the confidential-transfer
   instruction-plan helpers from `@solana-program/token-2022/confidential`
 - **Auth**: JWT sessions with wallet signature verification
 
@@ -87,12 +87,17 @@ bun run setup:mint   # creates a Token-2022 mint with the CT extension on devnet
 
 ## Confidential Transfer Operations
 
-The app supports all confidential transfer operations. On devnet, ZK proofs
-do not fit in a single transaction, so operations that need proofs are split
-across multiple transactions using **context-state accounts** — each proof
-is verified into its own account first, then the token instruction executes,
-then the context accounts are closed. This is handled automatically by the
-instruction-plan helpers from `@solana-program/token-2022/confidential`.
+The app supports all confidential transfer operations. Operations that need
+proofs use **context-state accounts**: each proof is verified into its own
+account, the token instruction executes, then the context accounts are
+closed. The app sends **version 1 transactions** (4096-byte limit vs 1232 for
+legacy/v0), so a whole transfer or withdrawal fits in **one transaction**.
+This is handled by the instruction-plan helpers from
+`@solana-program/token-2022/confidential` plus kit's transaction planner.
+
+If a connected wallet doesn't advertise v1 support (wallet-standard
+`supportedTransactionVersions`), the app falls back to v0 and the same plan
+is split across ~5 transactions.
 
 ### 1. Configure Account
 Creates the ATA, reallocates it for the CT extension, configures it with
@@ -106,16 +111,16 @@ Moves tokens from public balance to confidential pending balance.
 Moves tokens from pending to available confidential balance (required before transfers).
 
 ### 4. Confidential Transfer
-Sends confidential tokens across several transactions:
-1. Create & verify equality proof (context-state account)
-2. Create & verify ciphertext-validity proof (context-state account)
-3. Create & verify range proof (context-state account)
-4. Execute transfer
-5. Close context-state accounts (rent refunded)
+Sends confidential tokens in a single v1 transaction (~2.9 KB) that:
+1. Creates & verifies the equality proof (context-state account)
+2. Creates & verifies the ciphertext-validity proof (context-state account)
+3. Creates & verifies the range proof (context-state account)
+4. Executes the transfer
+5. Closes the context-state accounts (rent refunded)
 
 ### 5. Withdraw
 Moves tokens from confidential available balance back to public balance
-(equality + range proofs via context-state accounts).
+(equality + range proofs via context-state accounts, in one v1 transaction).
 
 ## API Endpoints
 

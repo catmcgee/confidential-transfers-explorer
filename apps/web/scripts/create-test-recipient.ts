@@ -32,6 +32,9 @@ import {
   createTransactionMessage,
   createTransactionPlanner,
   createTransactionPlanExecutor,
+  estimateAndSetResourceLimitsFactory,
+  estimateResourceLimitsFactory,
+  fillTransactionMessageProvisoryResourceLimits,
   getBase58Decoder,
   getBase58Encoder,
   getBase64EncodedWireTransaction,
@@ -55,6 +58,7 @@ import {
 } from '@solana-program/token-2022/confidential';
 import { getTransferSolInstruction } from '@solana-program/system';
 import { AeCiphertext, AeKey, ElGamalKeypair, ElGamalSecretKey } from '@solana/zk-sdk/bundler';
+import { legacyKeyBytesFromSignature } from '../src/lib/ctKeyDerivation';
 
 const RPC_URL = process.env.SOLANA_RPC_URL ?? 'https://api.devnet.solana.com';
 const DECIMALS = 9;
@@ -122,15 +126,17 @@ function createPlannerAndExecutor(payer: KeyPairSigner): {
   const planner = createTransactionPlanner({
     createTransactionMessage: () =>
       pipe(
-        createTransactionMessage({ version: 0 }),
+        createTransactionMessage({ version: 1 }),
         message => setTransactionMessageFeePayerSigner(payer, message),
+        fillTransactionMessageProvisoryResourceLimits,
       ),
   });
+  const estimateAndSetResourceLimits = estimateAndSetResourceLimitsFactory(estimateResourceLimitsFactory({ rpc }));
   const executor = createTransactionPlanExecutor({
     executeTransactionMessage: async (_context, transactionMessage) => {
       const { value: latestBlockhash } = await rpc.getLatestBlockhash().send();
       const withLifetime = setTransactionMessageLifetimeUsingBlockhash(latestBlockhash, transactionMessage);
-      const transaction = await signTransactionMessageWithSigners(withLifetime);
+      const transaction = await signTransactionMessageWithSigners(await estimateAndSetResourceLimits(withLifetime));
       const signature = getSignatureFromTransaction(transaction);
       await rpc
         .sendTransaction(getBase64EncodedWireTransaction(transaction), { encoding: 'base64' })
@@ -138,7 +144,7 @@ function createPlannerAndExecutor(payer: KeyPairSigner): {
       console.log(`  sent https://explorer.solana.com/tx/${signature}?cluster=devnet`);
       await confirmSignature(signature);
       await sleep(TX_DELAY_MS);
-      return transaction;
+      return { signature, transaction };
     },
   });
   return { planner, executor };
@@ -161,7 +167,7 @@ async function executeInstruction(
 }
 
 // Text-message key derivation — MUST match apps/web/src/lib/confidentialTransfer.ts
-// deriveCtKeys, so the web app (Phantom signing the same text) derives the
+// deriveCtKeys (same messages, same ctKeyDerivation), so the web app (Phantom signing the same text) derives the
 // same keys for this wallet.
 async function deriveCtKeysFromText(signer: KeyPairSigner, mint: Address) {
   const signText = async (text: string): Promise<Uint8Array> => {
@@ -174,10 +180,11 @@ async function deriveCtKeysFromText(signer: KeyPairSigner, mint: Address) {
   };
 
   const elgamalSignature = await signText(`ElGamalSecretKey:${signer.address}:${mint}`);
-  const elgamalKeypair = ElGamalKeypair.fromSignature(elgamalSignature);
+  const elgamalSecretKey = ElGamalSecretKey.fromBytes(legacyKeyBytesFromSignature(elgamalSignature).elgamalSecret);
+  const elgamalKeypair = ElGamalKeypair.fromSecretKey(elgamalSecretKey);
   const aeSignature = await signText(`AeKey:${signer.address}:${mint}`);
-  const aesKey = AeKey.fromSignature(aeSignature);
-  return { elgamalKeypair, elgamalSecretKey: elgamalKeypair.secret(), aesKey };
+  const aesKey = AeKey.fromBytes(legacyKeyBytesFromSignature(aeSignature).aesKey);
+  return { elgamalKeypair, elgamalSecretKey, aesKey };
 }
 
 async function main() {

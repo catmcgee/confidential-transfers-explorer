@@ -37,6 +37,7 @@ bun run test:e2e
 ### Notes
 
 - `SOLANA_RPC_URL` overrides the default `https://api.devnet.solana.com`.
-- The full flow sends ~15 transactions and takes a couple of minutes; a small delay is
+- The full flow sends ~10 version 1 transactions (the confidential transfer and the
+  withdraw are one transaction each, and the test asserts that) and takes about a minute; a small delay is
   inserted between transactions to stay under public RPC rate limits.
 - Each transaction is printed with a Solana Explorer link (`?cluster=devnet`).

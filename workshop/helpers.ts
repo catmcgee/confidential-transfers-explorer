@@ -28,6 +28,9 @@ import {
   createTransactionMessage,
   createTransactionPlanner,
   createTransactionPlanExecutor,
+  estimateAndSetResourceLimitsFactory,
+  estimateResourceLimitsFactory,
+  fillTransactionMessageProvisoryResourceLimits,
   getBase58Decoder,
   getBase58Encoder,
   getBase64EncodedWireTransaction,
@@ -43,6 +46,7 @@ import {
 // confidential helpers use internally — so objects cross the WASM boundary as
 // the same class instances. Node needs NODE_OPTIONS=--experimental-wasm-modules.
 import { AeCiphertext, AeKey, ElGamalCiphertext, ElGamalKeypair, ElGamalSecretKey } from '@solana/zk-sdk/bundler';
+import { legacyKeyBytesFromSignature } from '../apps/web/src/lib/ctKeyDerivation.ts';
 
 // ---------------------------------------------------------------------------
 // RPC + constants
@@ -209,18 +213,30 @@ export function describeInstruction(ix: Instruction): string {
 
 export type Tools = { planner: TransactionPlanner; executor: TransactionPlanExecutor };
 
-/** Planner + executor that narrate every transaction they send (instructions + explorer link). */
+/**
+ * Planner + executor that narrate every transaction they send (instructions + explorer link).
+ *
+ * Transactions are VERSION 1: up to 4096 bytes instead of the old 1232, which
+ * is what lets a whole confidential transfer fit in one transaction. v1 also
+ * moves the compute budget into the message header, and an unset budget is
+ * ZERO (not a default), so each message is simulated to fill it in.
+ */
 export function createTools(payer: KeyPairSigner): Tools {
   let txCount = 0;
   const planner = createTransactionPlanner({
     createTransactionMessage: () =>
-      pipe(createTransactionMessage({ version: 0 }), m => setTransactionMessageFeePayerSigner(payer, m)),
+      pipe(
+        createTransactionMessage({ version: 1 }),
+        m => setTransactionMessageFeePayerSigner(payer, m),
+        fillTransactionMessageProvisoryResourceLimits,
+      ),
   });
+  const estimateAndSetResourceLimits = estimateAndSetResourceLimitsFactory(estimateResourceLimitsFactory({ rpc }));
   const executor = createTransactionPlanExecutor({
     executeTransactionMessage: async (_context, transactionMessage) => {
       const { value: latestBlockhash } = await rpc.getLatestBlockhash().send();
       const withLifetime = setTransactionMessageLifetimeUsingBlockhash(latestBlockhash, transactionMessage);
-      const transaction = await signTransactionMessageWithSigners(withLifetime);
+      const transaction = await signTransactionMessageWithSigners(await estimateAndSetResourceLimits(withLifetime));
       const signature = getSignatureFromTransaction(transaction);
       txCount += 1;
       // Print the whole block in ONE console.log: some plans execute
@@ -234,7 +250,7 @@ export function createTools(payer: KeyPairSigner): Tools {
       console.log(block.join('\n'));
       await confirmSignature(signature);
       await sleep(TX_DELAY_MS);
-      return transaction;
+      return { signature, transaction };
     },
   });
   return { planner, executor };
@@ -277,9 +293,11 @@ export async function deriveCtKeys(signer: KeyPairSigner, mint: Address): Promis
     if (!signature) throw new Error('No signature produced');
     return new Uint8Array(signature);
   };
-  const elgamalKeypair = ElGamalKeypair.fromSignature(await signText(`ElGamalSecretKey:${signer.address}:${mint}`));
-  const aesKey = AeKey.fromSignature(await signText(`AeKey:${signer.address}:${mint}`));
-  return { elgamalKeypair, elgamalSecretKey: elgamalKeypair.secret(), aesKey };
+  const elgamalSecretKey = ElGamalSecretKey.fromBytes(
+    legacyKeyBytesFromSignature(await signText(`ElGamalSecretKey:${signer.address}:${mint}`)).elgamalSecret,
+  );
+  const aesKey = AeKey.fromBytes(legacyKeyBytesFromSignature(await signText(`AeKey:${signer.address}:${mint}`)).aesKey);
+  return { elgamalKeypair: ElGamalKeypair.fromSecretKey(elgamalSecretKey), elgamalSecretKey, aesKey };
 }
 
 // ---------------------------------------------------------------------------

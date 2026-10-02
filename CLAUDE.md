@@ -23,12 +23,21 @@ Node (bun cannot load the WASM ESM modules):
 - The app runs on localhost:3000
 
 ## Confidential Transfers
-- Uses @solana/zk-sdk (0.4.x) for ElGamal crypto and ZK proofs
-- Uses @solana-program/token-2022 (0.12.x) — including the high-level
+- Uses @solana/zk-sdk (0.5.x) for ElGamal crypto and ZK proofs
+- Uses @solana-program/token-2022 (0.19.x) — including the high-level
   helpers from `@solana-program/token-2022/confidential` (instruction plans
   that generate proofs and verify them via context-state accounts)
-- Uses @solana/kit (6.x) for RPC and transaction building; kit is pinned to
-  6.x because token-2022 0.12 peer-depends on kit ^6.4
-- Transfers/withdrawals span MULTIPLE transactions on devnet (proofs are
-  verified into context-state accounts first) — this is expected
+- Uses @solana/kit (8.x) for RPC and transaction building
+- All transactions are VERSION 1 (4096-byte limit): a transfer or withdrawal
+  is ONE transaction. v1 budgets zero compute units / loaded-account bytes
+  unless set, so messages get provisory limits at planning time and are
+  simulated (`estimateAndSetResourceLimitsFactory`) before signing.
+  Wallets that don't list v1 in `supportedTransactionVersions` fall back to
+  v0 (multi-transaction).
+- Fetch transactions with `maxSupportedTransactionVersion: 1` — the RPC
+  rejects v1 transactions when the cap is 0
+- ElGamal/AES keys come from `src/lib/ctKeyDerivation.ts`, which reproduces
+  zk-sdk 0.4's `fromSignature` (removed in 0.5). Never switch to 0.5's
+  `ConfidentialKeys.fromSignature` — it derives different keys and would
+  strand existing encrypted balances
 - WebAssembly is enabled in Next.js config

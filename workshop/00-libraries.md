@@ -8,10 +8,10 @@ Two on-chain programs are involved: **Token-2022** (holds the balances, executes
 
 | Package | Version | Role |
 |---|---|---|
-| [`@solana/kit`](https://github.com/anza-xyz/kit) | 6.x | RPC, transactions, signers, instruction plans. Successor to web3.js. |
-| [`@solana-program/token-2022`](https://github.com/solana-program/token-2022) | 0.12+ | Builders for every Token-2022 instruction — plus the **`/confidential` subpath** with the high-level helpers this workshop leans on. |
-| [`@solana/zk-sdk`](https://www.npmjs.com/package/@solana/zk-sdk) | 0.4+ | The cryptography: ElGamal/AES keys, ciphertexts, ZK proof generation. The CLI's Rust code compiled to WASM — JavaScript never reimplements crypto. |
-| [`@solana/connector`](https://github.com/solana-foundation/connectorkit) | 0.2+ | ConnectorKit — wallet connection in the app (browser only). |
+| [`@solana/kit`](https://github.com/anza-xyz/kit) | 8.x | RPC, transactions (including **version 1**), signers, instruction plans. Successor to web3.js. |
+| [`@solana-program/token-2022`](https://github.com/solana-program/token-2022) | 0.19+ | Builders for every Token-2022 instruction — plus the **`/confidential` subpath** with the high-level helpers this workshop leans on. |
+| [`@solana/zk-sdk`](https://www.npmjs.com/package/@solana/zk-sdk) | 0.5+ | The cryptography: ElGamal/AES keys, ciphertexts, ZK proof generation. The CLI's Rust code compiled to WASM — JavaScript never reimplements crypto. |
+| [`@solana/connector`](https://github.com/solana-foundation/connectorkit) | 0.3+ | ConnectorKit — wallet connection in the app (browser only). |
 
 The import that matters most:
 
@@ -23,7 +23,7 @@ import {
 } from '@solana-program/token-2022/confidential';
 ```
 
-These return kit **instruction plans**: the transfer helper alone generates three ZK proofs, verifies them via temporary context accounts, executes the transfer, and cleans up — you just execute the plan.
+These return kit **instruction plans**: the transfer helper alone generates three ZK proofs, verifies them via temporary context accounts, executes the transfer, and cleans up — you just execute the plan. Packed into a version 1 transaction, that whole plan is a single transaction.
 
 ## Runtime note: WASM
 
@@ -31,8 +31,8 @@ These return kit **instruction plans**: the transfer helper alone generates thre
 
 ## FAQ
 
-**Why kit 6.x and not 7?**
-`@solana-program/token-2022` 0.12 peer-depends on kit `^6.4`. Pin 6.x until the range moves.
+**What are version 1 transactions?**
+A newer transaction format: up to 4096 bytes (legacy/v0: 1232) and the compute budget lives in the message header instead of ComputeBudget instructions. The bigger limit is what fits a confidential transfer in one transaction. An unset compute budget is zero, not a default, so the workshop simulates each transaction to fill it in.
 
 **Can I use web3.js v1 instead?**
 Not for the confidential helpers — they're kit-native.

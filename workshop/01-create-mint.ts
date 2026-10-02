@@ -95,7 +95,9 @@ async function main() {
   console.log('amount would also be decryptable by that one designated party — that is the');
   console.log('compliance story: confidential to the world, visible to your auditor.');
 
-  writeState({ mint, mintAuthority: payer.address, decimals: DECIMALS });
+  // A new mint starts a new run: Alice and Bob from a previous run hold
+  // accounts for the OLD mint, so forget them (undefined keys aren't saved).
+  writeState({ mint, mintAuthority: payer.address, decimals: DECIMALS, alice: undefined, bob: undefined });
 }
 
 main().catch(err => {

@@ -15,6 +15,7 @@ import {
   decryptElGamalBalance,
   parseElGamalPubkeyFromAccountInfo,
   type CtKeys,
+  type SupportedTransactionVersion,
 } from '@/lib/confidentialTransfer';
 
 // Progress tracking type (local since it's UI-specific)
@@ -26,14 +27,19 @@ interface TransferProgress {
   error?: string;
 }
 
-// A confidential transfer on devnet verifies its ZK proofs into context-state
-// accounts across several transactions before the transfer itself executes.
-// This is only an estimate used for the progress bar until the plan finishes.
-const ESTIMATED_TRANSFER_TRANSACTIONS = 5;
+// With v1 transactions (4096 bytes) the proofs, the transfer and the proof
+// account cleanup all fit in ONE transaction. Wallets that can only sign v0
+// (1232 bytes) need the plan split across ~5 transactions. Only an estimate
+// for the progress bar until the plan finishes.
+const estimatedTransferTransactions = (version: SupportedTransactionVersion) =>
+  version === 1 ? 1 : 5;
 
-// What each transaction in the transfer plan is doing, in order. The exact
+const SINGLE_TRANSFER_TX_LABEL =
+  'Verified the equality, validity and range proofs, executed the transfer and closed the proof accounts';
+
+// What each v0 transaction in the transfer plan is doing, in order. The exact
 // count can vary, so anything past the list falls back to a generic label.
-const TRANSFER_TX_LABELS = [
+const V0_TRANSFER_TX_LABELS = [
   'Verified the equality proof (new balance matches the ciphertext)',
   'Verified the validity proof (amount encrypted to the right keys)',
   'Wrote the range proof context (amount is in bounds, not negative)',
@@ -94,7 +100,7 @@ interface TokenAccount {
 // In the browser, go through our same-origin /api/rpc proxy: it forwards to
 // the private server-side RPC (SOLANA_RPC_URL), avoiding both the public
 // endpoint's rate limits and CORS-less 429s that surface as "Failed to
-// fetch" during multi-transaction transfer flows.
+// fetch" during transfer flows.
 const RPC_URL =
   typeof window !== 'undefined'
     ? `${window.location.origin}/api/rpc`
@@ -124,7 +130,16 @@ function CopyButton({ text, label }: { text: string; label?: string }) {
 }
 
 export function TransferModal({ isOpen, onClose, onTransferComplete }: TransferModalProps) {
-  const { isConnected, publicKey, connect, isConnecting, messageSigner, transactionSigner } = useWallet();
+  const {
+    isConnected,
+    publicKey,
+    connect,
+    isConnecting,
+    messageSigner,
+    transactionSigner,
+    transactionVersion,
+  } = useWallet();
+  const estimatedTransferTxs = estimatedTransferTransactions(transactionVersion);
   const [tokens, setTokens] = useState<TokenAccount[]>([]);
   const [isLoadingTokens, setIsLoadingTokens] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -333,6 +348,7 @@ export function TransferModal({ isOpen, onClose, onTransferComplete }: TransferM
         plan: singleInstructionPlan(depositInstruction),
         rpc,
         feePayer: walletSigner,
+        transactionVersion,
       });
       const signature = signatures[signatures.length - 1] ?? '';
 
@@ -399,6 +415,7 @@ export function TransferModal({ isOpen, onClose, onTransferComplete }: TransferM
         plan: singleInstructionPlan(applyInstruction),
         rpc,
         feePayer: walletSigner,
+        transactionVersion,
       });
       const signature = signatures[signatures.length - 1] ?? '';
 
@@ -550,7 +567,7 @@ export function TransferModal({ isOpen, onClose, onTransferComplete }: TransferM
     }
   };
 
-  // Handle confidential transfer via the multi-transaction instruction plan
+  // Handle confidential transfer via the instruction plan (one v1 transaction)
   const handleTransfer = async () => {
     if (!selectedToken || !publicKey || !transferAmount || !recipientInfo?.isCtConfigured || !recipientInfo.elgamalPubkey) {
       setOperationError('Missing required information for transfer');
@@ -589,7 +606,7 @@ export function TransferModal({ isOpen, onClose, onTransferComplete }: TransferM
     setTransferProgress({
       step: 'generating_proofs',
       currentTransaction: 0,
-      totalTransactions: ESTIMATED_TRANSFER_TRANSACTIONS,
+      totalTransactions: estimatedTransferTxs,
     });
 
     try {
@@ -597,8 +614,8 @@ export function TransferModal({ isOpen, onClose, onTransferComplete }: TransferM
       const walletSigner = getWalletSigner();
 
       // Build the transfer plan: generates the equality, validity, and range
-      // proofs and verifies them via context-state accounts across multiple
-      // transactions before executing the transfer.
+      // proofs, verifies them into context-state accounts, executes the
+      // transfer and closes the proof accounts.
       const plan = await createTransferPlan({
         rpc,
         payer: walletSigner,
@@ -613,19 +630,20 @@ export function TransferModal({ isOpen, onClose, onTransferComplete }: TransferM
       setTransferProgress({
         step: 'executing_transfer',
         currentTransaction: 0,
-        totalTransactions: ESTIMATED_TRANSFER_TRANSACTIONS,
+        totalTransactions: estimatedTransferTxs,
       });
 
       const { signatures } = await executeInstructionPlan({
         plan,
         rpc,
         feePayer: walletSigner,
+        transactionVersion,
         onProgress: ({ signature, index }) => {
           setTransferProgress({
             step: 'executing_transfer',
             currentTransaction: index + 1,
             // Keep the bar from hitting 100% before the plan is done
-            totalTransactions: Math.max(ESTIMATED_TRANSFER_TRANSACTIONS, index + 2),
+            totalTransactions: Math.max(estimatedTransferTxs, index + 2),
             signature,
           });
         },
@@ -680,7 +698,7 @@ export function TransferModal({ isOpen, onClose, onTransferComplete }: TransferM
       setTransferProgress({
         step: 'error',
         currentTransaction: 0,
-        totalTransactions: ESTIMATED_TRANSFER_TRANSACTIONS,
+        totalTransactions: estimatedTransferTxs,
         error: errorMessage,
       });
     } finally {
@@ -818,6 +836,7 @@ export function TransferModal({ isOpen, onClose, onTransferComplete }: TransferM
         plan,
         rpc,
         feePayer: walletSigner,
+        transactionVersion,
       });
 
       // Refresh token accounts (don't let refresh failure mask a successful configure)
@@ -1261,7 +1280,8 @@ export function TransferModal({ isOpen, onClose, onTransferComplete }: TransferM
                                     <div className="space-y-3">
                                       <div className="text-[10px] text-emerald-400 font-medium">
                                         {transferProgress.step === 'generating_proofs' && 'Generating ZK proofs...'}
-                                        {transferProgress.step === 'executing_transfer' && 'Sending transfer transactions...'}
+                                        {transferProgress.step === 'executing_transfer' &&
+                                          (transferProgress.totalTransactions === 1 ? 'Sending transfer transaction...' : 'Sending transfer transactions...')}
                                         {transferProgress.step === 'complete' && 'Transfer complete!'}
                                         {transferProgress.step === 'error' && 'Transfer failed'}
                                       </div>
@@ -1278,12 +1298,16 @@ export function TransferModal({ isOpen, onClose, onTransferComplete }: TransferM
                                       </div>
 
                                       <div className="text-[10px] text-zinc-500">
-                                        {transferProgress.currentTransaction} of ~{transferProgress.totalTransactions} transactions confirmed
+                                        {transferProgress.totalTransactions === 1
+                                          ? transferProgress.currentTransaction === 1 ? 'Transaction confirmed' : 'Waiting for 1 transaction to confirm'
+                                          : `${transferProgress.currentTransaction} of ~${transferProgress.totalTransactions} transactions confirmed`}
                                       </div>
 
                                       {transferProgress.step === 'executing_transfer' && transferProgress.currentTransaction > 0 && (
                                         <div className="text-[10px] text-zinc-400">
-                                          {TRANSFER_TX_LABELS[transferProgress.currentTransaction - 1] ?? 'Finalizing...'}
+                                          {transactionVersion === 1
+                                            ? SINGLE_TRANSFER_TX_LABEL
+                                            : V0_TRANSFER_TX_LABELS[transferProgress.currentTransaction - 1] ?? 'Finalizing...'}
                                         </div>
                                       )}
 
@@ -1423,9 +1447,20 @@ export function TransferModal({ isOpen, onClose, onTransferComplete }: TransferM
                                           </button>
 
                                           <div className="mt-2 p-2 bg-emerald-500/10 border border-emerald-500/20 rounded text-[10px] text-emerald-400/80">
-                                            <strong>Note:</strong> The proofs are too big for one transaction, so
-                                            each is verified into its own on-chain account first (~5 transactions
-                                            total), then the transfer executes and the proof accounts are closed.
+                                            {transactionVersion === 1 ? (
+                                              <>
+                                                <strong>Note:</strong> This is one version 1 transaction: each proof
+                                                is verified into its own on-chain account, then the transfer executes
+                                                and the proof accounts are closed, all atomically.
+                                              </>
+                                            ) : (
+                                              <>
+                                                <strong>Note:</strong> Your wallet can&apos;t sign version 1
+                                                transactions yet, so the proofs are verified in separate transactions
+                                                first (~5 total), then the transfer executes and the proof accounts
+                                                are closed.
+                                              </>
+                                            )}
                                           </div>
                                         </>
                                       )}

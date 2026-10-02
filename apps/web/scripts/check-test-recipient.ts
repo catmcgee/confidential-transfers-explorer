@@ -11,11 +11,16 @@ import {
   getBase58Encoder, getBase64EncodedWireTransaction, getSignatureFromTransaction,
   pipe, setTransactionMessageFeePayerSigner, setTransactionMessageLifetimeUsingBlockhash,
   signTransactionMessageWithSigners, appendTransactionMessageInstructions,
+  estimateAndSetResourceLimitsFactory, estimateResourceLimitsFactory,
   type Signature,
 } from '@solana/kit';
-import { fetchToken } from '@solana-program/token-2022';
+import { fetchToken, type Extension } from '@solana-program/token-2022';
+
+type CtAccountExtension = Extract<Extension, { __kind: 'ConfidentialTransferAccount' }>;
+const isCtAccount = (e: Extension): e is CtAccountExtension => e.__kind === 'ConfidentialTransferAccount';
 import { getApplyConfidentialPendingBalanceInstructionFromToken } from '@solana-program/token-2022/confidential';
-import { AeCiphertext, AeKey, ElGamalCiphertext, ElGamalKeypair } from '@solana/zk-sdk/bundler';
+import { AeCiphertext, AeKey, ElGamalCiphertext, ElGamalKeypair, ElGamalSecretKey } from '@solana/zk-sdk/bundler';
+import { legacyKeyBytesFromSignature } from '../src/lib/ctKeyDerivation';
 
 async function main() {
   const info = JSON.parse(readFileSync('/Users/catmcgee/Documents/work/conf-transfers-explorer/apps/web/scripts/test-recipient.json', 'utf8'));
@@ -26,12 +31,16 @@ async function main() {
     const [d] = await signer.signMessages([createSignableMessage(new TextEncoder().encode(text))]);
     return new Uint8Array(d[signer.address]);
   };
-  const elgamal = ElGamalKeypair.fromSignature(await signText(`ElGamalSecretKey:${signer.address}:${info.mint}`));
-  const aes = AeKey.fromSignature(await signText(`AeKey:${signer.address}:${info.mint}`));
+  const elgamal = ElGamalKeypair.fromSecretKey(ElGamalSecretKey.fromBytes(
+    legacyKeyBytesFromSignature(await signText(`ElGamalSecretKey:${signer.address}:${info.mint}`)).elgamalSecret,
+  ));
+  const aes = AeKey.fromBytes(
+    legacyKeyBytesFromSignature(await signText(`AeKey:${signer.address}:${info.mint}`)).aesKey,
+  );
 
   const account = await fetchToken(rpc, address(info.tokenAccount), { commitment: 'confirmed' });
   const exts = account.data.extensions.__option === 'Some' ? account.data.extensions.value : [];
-  const ct = exts.find((e: any) => e.__kind === 'ConfidentialTransferAccount') as any;
+  const ct = exts.find(isCtAccount)!;
 
   const pendingLo = elgamal.secret().decrypt(ElGamalCiphertext.fromBytes(new Uint8Array(ct.pendingBalanceLow))!);
   const pendingHi = elgamal.secret().decrypt(ElGamalCiphertext.fromBytes(new Uint8Array(ct.pendingBalanceHigh))!);
@@ -53,12 +62,16 @@ async function main() {
       aesKey: aes,
     });
     const { value: blockhash } = await rpc.getLatestBlockhash().send();
+    // v1 transactions must carry explicit resource limits: estimate them by simulating.
+    const estimateAndSetResourceLimits = estimateAndSetResourceLimitsFactory(estimateResourceLimitsFactory({ rpc }));
     const tx = await signTransactionMessageWithSigners(
-      pipe(
-        createTransactionMessage({ version: 0 }),
-        m => setTransactionMessageFeePayerSigner(signer, m),
-        m => setTransactionMessageLifetimeUsingBlockhash(blockhash, m),
-        m => appendTransactionMessageInstructions([applyIx], m),
+      await estimateAndSetResourceLimits(
+        pipe(
+          createTransactionMessage({ version: 1 }),
+          m => setTransactionMessageFeePayerSigner(signer, m),
+          m => setTransactionMessageLifetimeUsingBlockhash(blockhash, m),
+          m => appendTransactionMessageInstructions([applyIx], m),
+        ),
       ),
     );
     const signature = getSignatureFromTransaction(tx);
@@ -74,7 +87,7 @@ async function main() {
 
     const after = await fetchToken(rpc, address(info.tokenAccount), { commitment: 'confirmed' });
     const afterExts = after.data.extensions.__option === 'Some' ? after.data.extensions.value : [];
-    const afterCt = afterExts.find((e: any) => e.__kind === 'ConfidentialTransferAccount') as any;
+    const afterCt = afterExts.find(isCtAccount)!;
     const afterAvailable = aes.decrypt(AeCiphertext.fromBytes(new Uint8Array(afterCt.decryptableAvailableBalance))!);
     console.log('available after apply:', Number(afterAvailable) / 1e9);
   }

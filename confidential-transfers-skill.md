@@ -18,11 +18,13 @@ Confidential transfers work on standard clusters, including devnet.
 - RPC endpoint: `https://api.devnet.solana.com`
 - WebSocket: `wss://api.devnet.solana.com`
 
-On standard clusters the 1232-byte transaction limit means ZK proofs cannot
-be inlined in a single transaction — transfers and withdrawals are split
-across multiple transactions using context-state accounts. The
-instruction-plan helpers in `@solana-program/token-2022/confidential`
-handle this automatically. Abstract the RPC endpoint into environment
+Proofs are verified into context-state accounts. With **version 1
+transactions** (4096-byte limit, `createTransactionMessage({ version: 1 })`
+in kit 8) the whole transfer or withdrawal (~2.9 KB) fits in ONE
+transaction; with legacy/v0 (1232 bytes) the same instruction plan is split
+across ~5. The instruction-plan helpers in
+`@solana-program/token-2022/confidential` plus kit's transaction planner
+handle the packing automatically. Abstract the RPC endpoint into environment
 configuration.
 
 ## Key Concepts
@@ -146,31 +148,43 @@ tokio = { version = "1", features = ["full"] }
 ```json
 {
   "dependencies": {
-    "@solana/zk-sdk": "^0.4.2",
-    "@solana-program/token-2022": "^0.12.0",
-    "@solana/kit": "^6.10.0",
-    "@noble/curves": "^2.0.1",
-    "@noble/hashes": "^2.0.1",
+    "@solana/zk-sdk": "^0.5.3",
+    "@solana-program/token-2022": "^0.19.0",
+    "@solana/kit": "^8.4.0",
+    "@noble/curves": "^2.4.0",
+    "@noble/hashes": "^2.4.0",
     "bs58": "^6.0.0"
   }
 }
 ```
 
 Notes:
-- `@solana/kit` is pinned to 6.x because `@solana-program/token-2022` 0.12
-  peer-depends on kit `^6.4.0` (kit 7 fails peer resolution).
+- `@solana-program/token-2022` 0.19 peer-depends on kit `^8.3` and zk-sdk
+  `^0.5.1`.
+- Version 1 transactions budget **zero** compute units and zero
+  loaded-account bytes unless set. Plan with
+  `fillTransactionMessageProvisoryResourceLimits` and simulate before signing
+  with `estimateAndSetResourceLimitsFactory(estimateResourceLimitsFactory({ rpc }))`.
+- Fetch transactions with `maxSupportedTransactionVersion: 1`; with `0` the
+  RPC rejects v1 transactions.
+- kit 8 plan executors return a context (`{ signature, transaction }`), not
+  a bare transaction or signature.
 - `@solana/web3.js` v1 and `@solana/spl-token` are no longer needed — the
   kit-native token-2022 client covers everything.
-- `@solana-program/token-2022@0.12+` exposes a `/confidential` subpath with
+- `@solana-program/token-2022@0.19+` exposes a `/confidential` subpath with
   high-level helpers: `getCreateConfidentialTransferAccountInstructionPlan`,
   `getConfidentialTransferInstructionPlan`,
   `getConfidentialWithdrawInstructionPlan`,
   `getApplyConfidentialPendingBalanceInstructionFromToken`, and
   signature-based key derivation (`deriveElGamalKeypairForOwnerMint`,
   `deriveAeKeyForOwnerMint`). Prefer these over hand-rolled proof plumbing.
-- `@solana/zk-sdk@0.4.x` added `ElGamalKeypair.fromSignature()` /
-  `AeKey.fromSignature()` and `signerMessage()` statics for CLI-compatible
-  key derivation from wallet signatures.
+- `@solana/zk-sdk@0.5` removed `ElGamalKeypair.fromSignature()` /
+  `AeKey.fromSignature()` in favour of `ConfidentialKeys.fromSignature()`
+  over a standard `solana-conf-bal/v1` message, and changed `fromSeed`. Both
+  derive DIFFERENT keys from 0.4. To keep existing balances decryptable,
+  reproduce 0.4: `h = SHA3-512(SHA3-512(signature))`; ElGamal secret =
+  `h mod ℓ` (little-endian) via `ElGamalSecretKey.fromBytes`; AES key =
+  `h[0..16]` via `AeKey.fromBytes`. New apps can adopt `ConfidentialKeys`.
 - Runtime caveat: the zk-sdk WASM is ESM — Node needs
   `--experimental-wasm-modules`; bun cannot load it (as of bun 1.2). Use
   webpack/Next for browser bundles.
@@ -769,7 +783,7 @@ no manual instruction building needed.
 
 ## Limitations
 
-- Works on standard clusters (devnet/mainnet-beta); transfer operations require 5-7 transactions due to ZK proof sizes vs the 1232-byte transaction limit
+- Works on standard clusters (devnet/mainnet-beta); with version 1 transactions a transfer or withdrawal is one transaction. Wallets that can only sign legacy/v0 need ~5 transactions (1232-byte limit)
 - Proof generation is computationally intensive (client-side WASM for TypeScript, native for Rust)
 - ElGamal BSGS decryption limited to values < 2^32 (mitigated by balance splitting and AE encryption)
 - Sender must be a `Keypair` (not generic `Signer`) for the Rust token client transfer API

@@ -15,6 +15,8 @@ import {
   createSolanaRpc,
   createSolanaRpcSubscriptions,
   createTransactionMessage,
+  estimateAndSetResourceLimitsFactory,
+  estimateResourceLimitsFactory,
   getSignatureFromTransaction,
   pipe,
   sendAndConfirmTransactionFactory,
@@ -24,6 +26,7 @@ import {
 } from '@solana/kit';
 import {
   TOKEN_2022_PROGRAM_ADDRESS,
+  fetchMint,
   findAssociatedTokenPda,
   getMintToInstruction,
 } from '@solana-program/token-2022';
@@ -59,7 +62,6 @@ loadEnvFile();
 const RPC_URL = process.env.NEXT_PUBLIC_SOLANA_RPC_URL || 'https://api.devnet.solana.com';
 const MINT_ADDRESS = process.env.CT_FAUCET_MINT || 'GUg6pt12mec2bMDTY9gCH6dG9FnhHHnEzSKKKt3P8kRw';
 const MINT_SECRET_KEY = process.env.MINT_SECRET_KEY;
-const DECIMALS = 9;
 
 function toWebSocketUrl(url: string): string {
   return url.replace(/^http/, 'ws');
@@ -71,12 +73,6 @@ async function main() {
 
   console.log(`Minting ${amount.toLocaleString()} tokens to faucet...`);
 
-  // Load mint keypair (has mint authority)
-  if (!MINT_SECRET_KEY) {
-    console.error('MINT_SECRET_KEY not set in .env');
-    process.exit(1);
-  }
-  const mintSigner = await createKeyPairSignerFromBytes(bs58.decode(MINT_SECRET_KEY));
   const mintAddress = address(MINT_ADDRESS);
 
   // Load faucet keypair to pay for tx
@@ -88,6 +84,27 @@ async function main() {
   const faucetSigner = await createKeyPairSignerFromBytes(bs58.decode(faucetPrivateKey));
 
   const rpc = createSolanaRpc(RPC_URL);
+
+  // Sign with whichever configured key is the mint's CURRENT authority: the
+  // faucet key normally, or the mint keypair (MINT_SECRET_KEY, optional) for
+  // mints created before authority moved to the faucet.
+  const { data: mint } = await fetchMint(rpc, mintAddress);
+  if (mint.mintAuthority.__option !== 'Some') {
+    console.error(`Mint ${mintAddress} has no mint authority — supply is fixed.`);
+    process.exit(1);
+  }
+  const candidates = [faucetSigner];
+  if (MINT_SECRET_KEY) candidates.push(await createKeyPairSignerFromBytes(bs58.decode(MINT_SECRET_KEY)));
+  const mintAuthority = candidates.find((signer) => signer.address === mint.mintAuthority.value);
+  if (!mintAuthority) {
+    console.error(
+      `Mint authority is ${mint.mintAuthority.value}, which matches neither FAUCET_PRIVATE_KEY ` +
+        `(${faucetSigner.address})${MINT_SECRET_KEY ? ' nor MINT_SECRET_KEY' : ''}.`
+    );
+    process.exit(1);
+  }
+  console.log(`Mint authority: ${mintAuthority.address}`);
+
   const rpcSubscriptions = createSolanaRpcSubscriptions(toWebSocketUrl(RPC_URL));
   const sendAndConfirm = sendAndConfirmTransactionFactory({ rpc, rpcSubscriptions });
 
@@ -98,13 +115,15 @@ async function main() {
     mint: mintAddress,
   });
 
-  const mintAmount = BigInt(amount) * BigInt(10 ** DECIMALS);
+  const mintAmount = BigInt(amount) * 10n ** BigInt(mint.decimals);
 
   const { value: latestBlockhash } = await rpc.getLatestBlockhash({ commitment: 'confirmed' }).send();
 
+  // v1 transactions must carry explicit resource limits: estimate them by simulating.
+  const estimateAndSetResourceLimits = estimateAndSetResourceLimitsFactory(estimateResourceLimitsFactory({ rpc }));
   const transactionMessage = pipe(
-    createTransactionMessage({ version: 0 }),
-    // Faucet is the fee payer; mint signer (mint authority) signs via the instruction
+    createTransactionMessage({ version: 1 }),
+    // Faucet is the fee payer; the mint authority signs via the instruction
     (tx) => setTransactionMessageFeePayerSigner(faucetSigner, tx),
     (tx) => setTransactionMessageLifetimeUsingBlockhash(latestBlockhash, tx),
     (tx) =>
@@ -113,7 +132,7 @@ async function main() {
           getMintToInstruction({
             mint: mintAddress,
             token: faucetAta,
-            mintAuthority: mintSigner, // mint authority
+            mintAuthority,
             amount: mintAmount,
           }),
         ],
@@ -121,7 +140,9 @@ async function main() {
       )
   );
 
-  const signedTransaction = await signTransactionMessageWithSigners(transactionMessage);
+  const signedTransaction = await signTransactionMessageWithSigners(
+    await estimateAndSetResourceLimits(transactionMessage)
+  );
   assertIsTransactionWithBlockhashLifetime(signedTransaction);
   await sendAndConfirm(signedTransaction, { commitment: 'confirmed', skipPreflight: true });
 

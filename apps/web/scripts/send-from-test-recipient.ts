@@ -17,6 +17,9 @@ import {
   createTransactionMessage,
   createTransactionPlanner,
   createTransactionPlanExecutor,
+  estimateAndSetResourceLimitsFactory,
+  estimateResourceLimitsFactory,
+  fillTransactionMessageProvisoryResourceLimits,
   getBase58Encoder,
   getBase64EncodedWireTransaction,
   getSignatureFromTransaction,
@@ -33,7 +36,8 @@ import {
   findAssociatedTokenPda,
 } from '@solana-program/token-2022';
 import { getConfidentialTransferInstructionPlan } from '@solana-program/token-2022/confidential';
-import { AeKey, ElGamalKeypair } from '@solana/zk-sdk/bundler';
+import { AeKey, ElGamalKeypair, ElGamalSecretKey } from '@solana/zk-sdk/bundler';
+import { legacyKeyBytesFromSignature } from '../src/lib/ctKeyDerivation';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const rpc = createSolanaRpc(process.env.SOLANA_RPC_URL!);
@@ -78,10 +82,12 @@ async function main() {
     const [d] = await sender.signMessages([createSignableMessage(new TextEncoder().encode(text))]);
     return new Uint8Array(d[sender.address]);
   };
-  const elgamalKeypair = ElGamalKeypair.fromSignature(
-    await signText(`ElGamalSecretKey:${sender.address}:${info.mint}`),
+  const elgamalKeypair = ElGamalKeypair.fromSecretKey(ElGamalSecretKey.fromBytes(
+    legacyKeyBytesFromSignature(await signText(`ElGamalSecretKey:${sender.address}:${info.mint}`)).elgamalSecret,
+  ));
+  const aesKey = AeKey.fromBytes(
+    legacyKeyBytesFromSignature(await signText(`AeKey:${sender.address}:${info.mint}`)).aesKey,
   );
-  const aesKey = AeKey.fromSignature(await signText(`AeKey:${sender.address}:${info.mint}`));
 
   const mint = address(info.mint);
   const sourceToken = address(info.tokenAccount);
@@ -110,27 +116,31 @@ async function main() {
     amount,
     sourceElgamalKeypair: elgamalKeypair,
     aesKey,
-    proofMode: 'context-state',
     payer,
     rpc,
   });
 
   const planner = createTransactionPlanner({
     createTransactionMessage: () =>
-      pipe(createTransactionMessage({ version: 0 }), m => setTransactionMessageFeePayerSigner(payer, m)),
+      pipe(
+        createTransactionMessage({ version: 1 }),
+        m => setTransactionMessageFeePayerSigner(payer, m),
+        fillTransactionMessageProvisoryResourceLimits,
+      ),
   });
+  const estimateAndSetResourceLimits = estimateAndSetResourceLimitsFactory(estimateResourceLimitsFactory({ rpc }));
   const executor = createTransactionPlanExecutor({
     executeTransactionMessage: async (_ctx, message) => {
       const { value: blockhash } = await rpc.getLatestBlockhash().send();
       const tx = await signTransactionMessageWithSigners(
-        setTransactionMessageLifetimeUsingBlockhash(blockhash, message),
+        await estimateAndSetResourceLimits(setTransactionMessageLifetimeUsingBlockhash(blockhash, message)),
       );
       const sig = getSignatureFromTransaction(tx);
       await rpc.sendTransaction(getBase64EncodedWireTransaction(tx), { encoding: 'base64' }).send();
       console.log(`  sent https://explorer.solana.com/tx/${sig}?cluster=devnet`);
       await confirm(sig);
       await sleep(500);
-      return tx;
+      return { signature: sig, transaction: tx };
     },
   });
   await executor(await planner(plan));

@@ -32,7 +32,7 @@ flowchart LR
 | **Ciphertext validity** | the grouped ciphertexts encrypt the same amount for sender/receiver/auditor | sending Bob garbage he can't decrypt |
 | **Range** (Bulletproof, u128) | amount and remaining balance are non-negative | "sending −5 tokens" to print 5 for yourself |
 
-## Why five transactions
+## Why one transaction
 
 ```mermaid
 %%{init: {'theme':'base','themeVariables':{'background':'transparent','primaryColor':'#16161f','primaryTextColor':'#ffffff','primaryBorderColor':'#9945FF','secondaryColor':'#0f2e21','secondaryTextColor':'#ffffff','secondaryBorderColor':'#14F195','tertiaryColor':'#241b38','tertiaryTextColor':'#ffffff','lineColor':'#8b8ba7','textColor':'#e6e6f0','fontSize':'14px','clusterBkg':'#101018','clusterBorder':'#3a3a4d','edgeLabelBackground':'#101018','actorBkg':'#16161f','actorTextColor':'#ffffff','actorBorder':'#9945FF','signalColor':'#e6e6f0','signalTextColor':'#e6e6f0','noteBkgColor':'#241b38','noteTextColor':'#e6e6f0','noteBorderColor':'#9945FF','labelBoxBkgColor':'#16161f','labelTextColor':'#ffffff','loopTextColor':'#e6e6f0'}}}%%
@@ -41,14 +41,16 @@ sequenceDiagram
     participant ZK as ZK ElGamal Proof program
     participant T22 as Token-2022
     Note over A: encrypt amount + generate 3 proofs locally
-    A->>ZK: tx 1 - create ctx account + VerifyCiphertextCommitmentEquality
-    A->>ZK: tx 2 - create ctx account + VerifyBatchedGroupedCiphertext3HandlesValidity
-    A->>ZK: tx 3 - create ctx account (range proof too big to include verify)
-    A->>ZK: tx 4 - VerifyBatchedRangeProofU128 (~1.5 KB proof)
-    A->>T22: tx 5 - ConfidentialTransfer (references the 3 ctx accounts)
-    A->>ZK: tx 5 (same tx) - CloseContextState x3 → rent refunded to payer
+    Note over A,T22: ONE version 1 transaction (~2.9 KB of a 4096-byte limit)
+    A->>ZK: create ctx account + VerifyCiphertextCommitmentEquality
+    A->>ZK: create ctx account + VerifyBatchedGroupedCiphertext3HandlesValidity
+    A->>ZK: create ctx account + VerifyBatchedRangeProofU128
+    A->>T22: ConfidentialTransfer (references the 3 ctx accounts)
+    A->>ZK: CloseContextState x3 → rent refunded to payer
     Note over T22: homomorphically: source available -= amount,<br/>dest pending += amount
 ```
+
+Legacy and v0 transactions cap out at 1232 bytes, smaller than the range proof alone, so the same plan used to need ~5 transactions. Version 1 transactions raise the limit to 4096 bytes, and the planner packs everything into one. It's atomic too: if any proof fails, nothing happens.
 
 ## The helpers
 
@@ -59,6 +61,8 @@ sequenceDiagram
     sourceTokenAccount, destinationTokenAccount, sourceElgamalKeypair, aesKey, payer, rpc })
   ```
 
-- **`createTransactionPlanner`** + **`createTransactionPlanExecutor`** (`@solana/kit`) — pack the plan into ~5 transactions, sign and send each
+- **`createTransactionPlanner`** + **`createTransactionPlanExecutor`** (`@solana/kit`) — pack the plan into transactions (one, with `createTransactionMessage({ version: 1 })`), sign and send
+
+- **`estimateAndSetResourceLimitsFactory`** (`@solana/kit`) — v1 puts the compute budget in the message header and an unset budget is **zero**, so simulate to fill it in before signing
 
 - **`getConfidentialWithdrawInstructionPlan`** (`@solana-program/token-2022/confidential`) — the withdraw sibling: encrypted available → public, same proof machinery

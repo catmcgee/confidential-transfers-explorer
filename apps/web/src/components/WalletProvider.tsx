@@ -22,6 +22,7 @@ import {
   type SignatureDictionary,
   type TransactionSigner,
 } from '@solana/kit';
+import type { SupportedTransactionVersion } from '@/lib/confidentialTransfer';
 import {
   createFreshLocalWallet,
   exportLocalWalletSecretKey,
@@ -57,6 +58,11 @@ interface WalletContextType {
   messageSigner: MessagePartialSigner | null;
   /** Kit TransactionSigner used as fee payer / authority for instruction plans */
   transactionSigner: TransactionSigner | null;
+  /**
+   * Transaction version to build: 1 (one transaction per confidential
+   * transfer) unless the connected wallet doesn't advertise v1 support.
+   */
+  transactionVersion: SupportedTransactionVersion;
   /** Replace the local wallet with a brand new keypair */
   newLocalWallet: () => Promise<void>;
   /** Base58 64-byte secret key of the local wallet (for backup/import) */
@@ -198,6 +204,19 @@ function WalletContextBridge({ children }: { children: ReactNode }) {
     };
   }, [standardAccount, signMessage, localSigner, isConnected]);
 
+  // Wallet-standard wallets list the transaction versions they can sign. The
+  // local keypair signs anything; an extension that doesn't list v1 gets v0
+  // (the same plan, split across several smaller transactions).
+  const transactionVersion = useMemo<SupportedTransactionVersion>(() => {
+    if (!standardWallet) return 1;
+    const feature = (standardWallet.features['solana:signAndSendTransaction'] ??
+      standardWallet.features['solana:signTransaction']) as
+      | { supportedTransactionVersions?: readonly (string | number)[] }
+      | undefined;
+    const versions = feature?.supportedTransactionVersions ?? [];
+    return versions.some((version) => String(version) === '1') ? 1 : 0;
+  }, [standardWallet]);
+
   const transactionSigner = useMemo(
     () =>
       (kitSigner as TransactionSigner | null) ?? (isConnected ? null : localSigner),
@@ -248,6 +267,7 @@ function WalletContextBridge({ children }: { children: ReactNode }) {
       signMessage,
       messageSigner,
       transactionSigner,
+      transactionVersion,
       newLocalWallet,
       exportLocalSecretKey,
     }),
@@ -263,6 +283,7 @@ function WalletContextBridge({ children }: { children: ReactNode }) {
       signMessage,
       messageSigner,
       transactionSigner,
+      transactionVersion,
       newLocalWallet,
       exportLocalSecretKey,
     ]

@@ -38,8 +38,8 @@ const RPC_URL =
   'https://api.devnet.solana.com';
 
 // Top up to 0.1 SOL whenever the recipient holds less than 0.05 — enough for
-// the multi-transaction proof flows (rent on proof context accounts is
-// refunded when they close).
+// the proof flows (rent on proof context accounts is refunded when they
+// close).
 const SOL_TOP_UP_LAMPORTS = 100_000_000n;
 const SOL_LOW_WATER_LAMPORTS = 50_000_000n;
 

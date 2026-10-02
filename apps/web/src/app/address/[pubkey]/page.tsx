@@ -8,7 +8,6 @@ import { UnlockPanel } from '@/components/UnlockPanel';
 import { LoadingSpinner, LoadingPage } from '@/components/LoadingSpinner';
 import { useAddressActivity } from '@/hooks/useAddressActivity';
 import { useAuth } from '@/hooks/useAuth';
-import { shortenAddress } from '@/lib/format';
 
 interface AddressPageProps {
   params: Promise<{ pubkey: string }>;
