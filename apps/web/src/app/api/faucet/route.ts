@@ -11,8 +11,7 @@ import {
 
 // Starter amount minted to first-time visitors (whole tokens)
 const FAUCET_AMOUNT = 50;
-// The mint endpoints share a per-wallet cooldown; users who want more tokens
-// can keep minting through /api/mint, so the faucet only needs to stop spam.
+// Per-wallet cooldown so the faucet can't be spammed.
 const COOLDOWN_MS = 60_000;
 
 export async function POST(request: Request) {
