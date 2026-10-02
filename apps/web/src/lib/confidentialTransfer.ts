@@ -8,7 +8,6 @@
  * whose 4096-byte limit fits a whole transfer or withdraw in one transaction.
  */
 
-
 import {
   address,
   createSignableMessage,
@@ -48,7 +47,7 @@ import { legacyKeyBytesFromSignature } from './ctKeyDerivation';
 // imported dynamically (Next.js webpack handles the WASM at bundle time).
 let zkSdk: typeof import('@solana/zk-sdk/bundler') | null = null;
 
-export async function getZkSdk() {
+async function getZkSdk() {
   if (!zkSdk) {
     zkSdk = await import('@solana/zk-sdk/bundler');
   }
@@ -93,7 +92,6 @@ export interface CtKeys {
   elgamalKeypair: ElGamalKeypairInstance;
   elgamalSecretKey: ElGamalSecretKeyInstance;
   aesKey: AeKeyInstance;
-  elgamalPubkeyBytes: Uint8Array;
 }
 
 async function signSeedText(signer: MessagePartialSigner, text: string): Promise<Uint8Array> {
@@ -145,17 +143,12 @@ export async function deriveCtKeys(
     elgamalKeypair,
     elgamalSecretKey,
     aesKey,
-    elgamalPubkeyBytes: elgamalKeypair.pubkey().toBytes(),
   };
 }
 
 // =============================================================================
-// Balance Encryption / Decryption
+// Balance Decryption
 // =============================================================================
-
-export async function encryptBalance(aesKey: AeKeyInstance, amount: bigint): Promise<Uint8Array> {
-  return aesKey.encrypt(amount).toBytes();
-}
 
 export async function decryptAeBalance(
   aesKey: AeKeyInstance,
@@ -469,7 +462,7 @@ export async function executeInstructionPlan(input: {
 
   const signatures: Signature[] = [];
   const executor = createTransactionPlanExecutor({
-    executeTransactionMessage: async (context, message) => {
+    executeTransactionMessage: async (_context, message) => {
       const { value: latestBlockhash } = await rpc
         .getLatestBlockhash({ commitment: 'confirmed' })
         .send();

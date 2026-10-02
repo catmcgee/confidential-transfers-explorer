@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { createSolanaRpc, singleInstructionPlan } from '@solana/kit';
 import { useWallet } from './WalletProvider';
-import { shortenAddress } from '@/lib/format';
+import { formatAmount, parseTokenAmount, shortenAddress } from '@/lib/format';
 import {
   deriveCtKeys,
   createConfigureAccountPlan,
@@ -198,27 +198,30 @@ export function TransferModal({ isOpen, onClose, onTransferComplete }: TransferM
     }
   }, [transferProgress?.step]);
 
-  // Cached keys - derivation requires a wallet signature, so cache per mint.
-  // Keys are bound to (owner, mint), not the token-account address.
-  const [cachedKeys, setCachedKeys] = useState<Record<string, CtKeys>>({});
+  // Derived keys, cached per (wallet, mint) because derivation asks the
+  // wallet for two signatures. A ref (not state) so async handlers always see
+  // the latest cache, and the in-flight promise is cached so two quick
+  // decrypt clicks share one round of signing.
+  const keyCache = useRef(new Map<string, Promise<CtKeys>>());
+  const keyCacheId = (mintAddress: string) => `${publicKey}:${mintAddress}`;
 
   // Derive the confidential-transfer keys for a mint via wallet signMessage.
-  const getCtKeys = async (mintAddress: string): Promise<CtKeys> => {
-    const cached = cachedKeys[mintAddress];
+  const getCtKeys = (mintAddress: string): Promise<CtKeys> => {
+    if (!publicKey || !messageSigner) return Promise.reject(new Error('Wallet not connected'));
+    const id = keyCacheId(mintAddress);
+    const cached = keyCache.current.get(id);
     if (cached) return cached;
-    if (!publicKey || !messageSigner) throw new Error('Wallet not connected');
 
-    try {
-      const keys = await deriveCtKeys(messageSigner, publicKey, mintAddress);
-      setCachedKeys(prev => ({ ...prev, [mintAddress]: keys }));
-      return keys;
-    } catch (err) {
+    const derivation = deriveCtKeys(messageSigner, publicKey, mintAddress).catch((err: unknown) => {
+      keyCache.current.delete(id); // let the user retry after a rejected prompt
       const errMsg = err instanceof Error ? err.message : String(err);
       if (errMsg.includes('UserKeyring') || errMsg.includes('signMessage') || errMsg.includes('locked')) {
         throw new Error('Message signing failed. Make sure your wallet is connected and unlocked.');
       }
       throw err;
-    }
+    });
+    keyCache.current.set(id, derivation);
+    return derivation;
   };
 
   // Wallet-backed kit signer used as fee payer / authority for plans.
@@ -270,18 +273,19 @@ export function TransferModal({ isOpen, onClose, onTransferComplete }: TransferM
 
       const keys = await getCtKeys(selectedToken.mint);
 
-      // Decrypt pending balance: lo (48-bit) and hi (16-bit) ElGamal ciphertexts
+      // Pending is two ElGamal ciphertexts: the low 16 bits and the high bits.
+      // ElGamal decryption is a discrete-log search, so it only works on
+      // small numbers — hence the split. total = lo + (hi << 16).
       const pendingLoBytes = Uint8Array.from(atob(freshCtState.pendingBalanceLo), c => c.charCodeAt(0));
       const pendingHiBytes = Uint8Array.from(atob(freshCtState.pendingBalanceHi), c => c.charCodeAt(0));
 
       const pendingLo = await decryptElGamalBalance(keys.elgamalSecretKey, pendingLoBytes);
       const pendingHi = await decryptElGamalBalance(keys.elgamalSecretKey, pendingHiBytes);
 
-      if (pendingLo !== null && pendingHi !== null) {
-        setDecryptedPendingBalance(pendingLo + (pendingHi << 16n));
-      } else {
-        setDecryptedPendingBalance(0n);
+      if (pendingLo === null || pendingHi === null) {
+        throw new Error('Could not decrypt the pending balance with this wallet\'s keys');
       }
+      setDecryptedPendingBalance(pendingLo + (pendingHi << 16n));
     } catch (err) {
       console.error('Failed to decrypt pending balance:', err);
     } finally {
@@ -316,7 +320,7 @@ export function TransferModal({ isOpen, onClose, onTransferComplete }: TransferM
   // Skips silently when keys aren't cached yet so it never triggers a
   // surprise wallet signature prompt.
   const refreshDecryptedBalances = async (mint: string) => {
-    if (!cachedKeys[mint]) return;
+    if (!keyCache.current.has(keyCacheId(mint))) return;
     try {
       await handleDecryptPending();
       await handleDecryptConfidential();
@@ -333,7 +337,10 @@ export function TransferModal({ isOpen, onClose, onTransferComplete }: TransferM
     setOperationError(null);
 
     try {
-      const amount = BigInt(Math.floor(parseFloat(depositAmount) * Math.pow(10, selectedToken.decimals)));
+      const amount = parseTokenAmount(depositAmount, selectedToken.decimals);
+      if (amount === null || amount <= 0n) {
+        throw new Error(`Enter a positive amount with at most ${selectedToken.decimals} decimal places`);
+      }
 
       const walletSigner = getWalletSigner();
       const depositInstruction = createDepositInstruction({
@@ -589,15 +596,15 @@ export function TransferModal({ isOpen, onClose, onTransferComplete }: TransferM
     }
 
     const available = decryptedConfidentialBalance;
-    const amount = BigInt(Math.floor(parseFloat(transferAmount) * Math.pow(10, selectedToken.decimals)));
+    const amount = parseTokenAmount(transferAmount, selectedToken.decimals);
 
-    if (amount > available) {
-      setOperationError(`Insufficient available balance. You have ${(Number(available) / Math.pow(10, selectedToken.decimals)).toFixed(selectedToken.decimals)} available.`);
+    if (amount === null || amount <= 0n) {
+      setOperationError(`Enter a positive amount with at most ${selectedToken.decimals} decimal places`);
       return;
     }
 
-    if (amount <= 0n) {
-      setOperationError('Amount must be greater than 0');
+    if (amount > available) {
+      setOperationError(`Insufficient available balance. You have ${formatAmount(available.toString(), selectedToken.decimals)} available.`);
       return;
     }
 
@@ -1120,7 +1127,7 @@ export function TransferModal({ isOpen, onClose, onTransferComplete }: TransferM
                                   <div className="text-zinc-500 mb-1">Pending</div>
                                   <div className="text-yellow-400 font-mono">
                                     {decryptedPendingBalance !== null
-                                      ? (Number(decryptedPendingBalance) / Math.pow(10, token.decimals)).toFixed(token.decimals)
+                                      ? formatAmount(decryptedPendingBalance.toString(), token.decimals)
                                       : (
                                         <button
                                           onClick={(e) => { e.stopPropagation(); handleDecryptPending(); }}
@@ -1137,7 +1144,7 @@ export function TransferModal({ isOpen, onClose, onTransferComplete }: TransferM
                                   <div className="text-zinc-500 mb-1">Confidential</div>
                                   <div className="text-emerald-400 font-mono">
                                     {decryptedConfidentialBalance !== null
-                                      ? (Number(decryptedConfidentialBalance) / Math.pow(10, token.decimals)).toFixed(token.decimals)
+                                      ? formatAmount(decryptedConfidentialBalance.toString(), token.decimals)
                                       : (
                                         <button
                                           onClick={(e) => { e.stopPropagation(); handleDecryptConfidential(); }}
@@ -1260,7 +1267,7 @@ export function TransferModal({ isOpen, onClose, onTransferComplete }: TransferM
                                   </p>
                                   {decryptedPendingBalance !== null && decryptedPendingBalance > 0n && (
                                     <div className="text-[10px] text-zinc-400 mb-2">
-                                      Pending: {(Number(decryptedPendingBalance) / Math.pow(10, token.decimals)).toFixed(token.decimals)}
+                                      Pending: {formatAmount(decryptedPendingBalance.toString(), token.decimals)}
                                     </div>
                                   )}
                                   <button
@@ -1425,7 +1432,7 @@ export function TransferModal({ isOpen, onClose, onTransferComplete }: TransferM
 
                                           <div className="text-[10px] text-zinc-500 mb-2">
                                             Confidential: {decryptedConfidentialBalance !== null
-                                              ? (Number(decryptedConfidentialBalance) / Math.pow(10, token.decimals)).toFixed(token.decimals)
+                                              ? formatAmount(decryptedConfidentialBalance.toString(), token.decimals)
                                               : (
                                                 <button
                                                   onClick={(e) => { e.stopPropagation(); handleDecryptConfidential(); }}

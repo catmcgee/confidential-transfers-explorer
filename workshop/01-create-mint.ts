@@ -47,12 +47,13 @@ async function main() {
   const mintSigner = await generateKeyPairSigner();
   const mint = mintSigner.address;
 
-  const ctMintExtension = extension('ConfidentialTransferMint', {
+  // The extension config, used both to size the account and to initialize it.
+  const ctMintConfig = {
     authority: payer.address,          // can update the CT config later
     autoApproveNewAccounts: true,      // no gatekeeping: anyone can opt in
     auditorElgamalPubkey: null,        // no auditor — amounts visible to NO third party
-  });
-  const space = BigInt(getMintSize([ctMintExtension]));
+  };
+  const space = BigInt(getMintSize([extension('ConfidentialTransferMint', ctMintConfig)]));
   const rent = await rpc.getMinimumBalanceForRentExemption(space).send();
 
   console.log(`New mint: ${mint}`);
@@ -72,12 +73,7 @@ async function main() {
         programAddress: TOKEN_2022_PROGRAM_ADDRESS,
       }),
       // 2. Write the ConfidentialTransferMint extension (the opt-in).
-      getInitializeConfidentialTransferMintInstruction({
-        mint,
-        authority: payer.address,
-        autoApproveNewAccounts: true,
-        auditorElgamalPubkey: null,
-      }),
+      getInitializeConfidentialTransferMintInstruction({ mint, ...ctMintConfig }),
       // 3. Initialize the ordinary mint data (decimals, mint authority).
       getInitializeMintInstruction({
         mint,

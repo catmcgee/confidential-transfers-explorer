@@ -51,7 +51,7 @@ export function formatAmount(amount: string | null, decimals: number = 9): strin
 
   try {
     const num = BigInt(amount);
-    const divisor = BigInt(10 ** decimals);
+    const divisor = 10n ** BigInt(decimals);
     const whole = num / divisor;
     const fraction = num % divisor;
 
@@ -65,6 +65,21 @@ export function formatAmount(amount: string | null, decimals: number = 9): strin
     // Fallback for values that can't be converted to BigInt
     return amount;
   }
+}
+
+/**
+ * Parse a user-typed token amount ("1.5") into raw base units, exactly.
+ * Returns null for anything that isn't a plain non-negative decimal or that
+ * has more fractional digits than the mint supports. Floats would round
+ * (e.g. "1.001" with 9 decimals would become 1000999999).
+ */
+export function parseTokenAmount(input: string, decimals: number): bigint | null {
+  const match = input.trim().match(/^(\d*)(?:\.(\d*))?$/);
+  if (!match) return null;
+  const [, whole, fraction = ''] = match;
+  if (!whole && !fraction) return null;
+  if (fraction.length > decimals) return null;
+  return BigInt(whole || '0') * 10n ** BigInt(decimals) + BigInt(fraction.padEnd(decimals, '0') || '0');
 }
 
 /**

@@ -76,7 +76,7 @@ async function main() {
   console.log('Bob re-derives his keys (same signed messages as step 03) and decrypts:');
 
   // Pending: ElGamal lo/hi. This is the slow discrete-log path — the reason
-  // the protocol splits pending into 16-bit chunks in the first place.
+  // the protocol splits pending into a 16-bit low part and a high part.
   const received = decryptPending(ct, keys.elgamalSecretKey);
   console.log(`\n  Bob's PENDING balance decrypts to: ${ui(received)} tokens`);
   console.log('  (that is what Alice sent in step 04 — nobody else can compute this)');
